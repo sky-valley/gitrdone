@@ -68,7 +68,7 @@ func createRepoHandler(repos repoCreator, baseURL string) http.Handler {
 		}
 
 		writeJSON(w, http.StatusCreated, createRepoResponse{
-			ID:            repo.ID,
+			ID:            formatRepoControlID(repo.ID),
 			Repo:          repo.Namespace + "/" + repo.Name,
 			GitURL:        strings.TrimRight(baseURL, "/") + "/" + repo.Namespace + "/" + repo.Name + ".git",
 			DefaultBranch: repo.DefaultBranch,
@@ -78,10 +78,14 @@ func createRepoHandler(repos repoCreator, baseURL string) http.Handler {
 
 func getRepoHandler(repos repoGetter, baseURL string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		repoID := strings.TrimSpace(r.PathValue("repoID"))
-
-		if repoID == "" {
+		rawRepoID := strings.TrimSpace(r.PathValue("repoID"))
+		if rawRepoID == "" {
 			writeError(w, http.StatusBadRequest, "repo id is required")
+			return
+		}
+		repoID, ok := parseRepoControlID(rawRepoID)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "repo id is invalid")
 			return
 		}
 
@@ -94,7 +98,7 @@ func getRepoHandler(repos repoGetter, baseURL string) http.Handler {
 		}
 
 		writeJSON(w, http.StatusOK, getRepoResponse{
-			ID:       repo.ID,
+			ID:       formatRepoControlID(repo.ID),
 			Repo:     repo.Namespace + "/" + repo.Name,
 			GitURL:   strings.TrimRight(baseURL, "/") + "/" + repo.Namespace + "/" + repo.Name + ".git",
 			Archived: false,
@@ -104,10 +108,14 @@ func getRepoHandler(repos repoGetter, baseURL string) http.Handler {
 
 func archiveRepoHandler(repos repoArchiver) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		repoID := strings.TrimSpace(r.PathValue("repoID"))
-
-		if repoID == "" {
+		rawRepoID := strings.TrimSpace(r.PathValue("repoID"))
+		if rawRepoID == "" {
 			writeError(w, http.StatusBadRequest, "repo id is required")
+			return
+		}
+		repoID, ok := parseRepoControlID(rawRepoID)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "repo id is invalid")
 			return
 		}
 
@@ -120,7 +128,7 @@ func archiveRepoHandler(repos repoArchiver) http.Handler {
 		}
 
 		writeJSON(w, http.StatusOK, archiveRepoResponse{
-			ID:         repo.ID,
+			ID:         formatRepoControlID(repo.ID),
 			Repo:       repo.Namespace + "/" + repo.Name,
 			Archived:   true,
 			ArchivedAt: repo.ArchivedAt.Format(time.RFC3339),

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,6 +24,10 @@ func TestMemoryRepoStoreCreateGetArchive(t *testing.T) {
 	}
 	if created.ID == "" {
 		t.Fatal("created id is empty")
+	}
+	assertCanonicalUUIDV4(t, created.ID)
+	if strings.HasPrefix(created.ID, "repo_") {
+		t.Fatalf("store id = %q, want raw UUID without repo_ prefix", created.ID)
 	}
 	if created.Namespace != "fixture" {
 		t.Fatalf("namespace = %q, want fixture", created.Namespace)
@@ -102,4 +107,118 @@ func TestMemoryRepoStoreReturnsNotFoundForUnknownRepoID(t *testing.T) {
 	if !errors.Is(err, errRepoNotFound) {
 		t.Fatalf("ArchiveRepo error = %v, want errRepoNotFound", err)
 	}
+}
+
+func TestMemoryRepoStoreCreateRepoToken(t *testing.T) {
+	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
+	store := newMemoryRepoStore(func() time.Time {
+		return now
+	})
+
+	repo, err := store.CreateRepo(context.Background(), createRepoInput{
+		Namespace:     "fixture",
+		Name:          "project-token",
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	token, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
+		RepoID:     repo.ID,
+		Scope:      "readwrite",
+		Subject:    "differ-bootstrap-job-abc",
+		TTLSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if token.ID == "" {
+		t.Fatal("token id is empty")
+	}
+	assertCanonicalUUIDV4(t, token.ID)
+	if strings.HasPrefix(token.ID, "token_") {
+		t.Fatalf("token id = %q, want raw UUID without token_ prefix", token.ID)
+	}
+	if token.RepoID != repo.ID {
+		t.Fatalf("repoID = %q, want %q", token.RepoID, repo.ID)
+	}
+	if token.Token == "" {
+		t.Fatal("token value is empty")
+	}
+	if token.TokenHash == "" {
+		t.Fatal("token hash is empty")
+	}
+	if token.TokenHash == token.Token {
+		t.Fatal("token hash stored plaintext token")
+	}
+	if token.Scope != "readwrite" {
+		t.Fatalf("scope = %q, want readwrite", token.Scope)
+	}
+	if token.Subject != "differ-bootstrap-job-abc" {
+		t.Fatalf("subject = %q, want differ-bootstrap-job-abc", token.Subject)
+	}
+	if token.CreatedAt != now {
+		t.Fatalf("createdAt = %s, want %s", token.CreatedAt, now)
+	}
+	if token.ExpiresAt != now.Add(time.Hour) {
+		t.Fatalf("expiresAt = %s, want %s", token.ExpiresAt, now.Add(time.Hour))
+	}
+
+	stored := store.tokens[token.ID]
+	if stored.Token != "" {
+		t.Fatalf("stored token kept plaintext: %q", stored.Token)
+	}
+	if stored.TokenHash != token.TokenHash {
+		t.Fatalf("stored token hash = %q, want %q", stored.TokenHash, token.TokenHash)
+	}
+	if store.tokenIDsByHash[token.TokenHash] != token.ID {
+		t.Fatalf("token hash lookup did not point at %q", token.ID)
+	}
+}
+
+func TestMemoryRepoStoreCreateRepoTokenRequiresExistingRepo(t *testing.T) {
+	store := newMemoryRepoStore(time.Now)
+
+	_, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
+		RepoID:     "repo_missing",
+		Scope:      "read",
+		Subject:    "differ-bootstrap-job-abc",
+		TTLSeconds: 3600,
+	})
+	if !errors.Is(err, errRepoNotFound) {
+		t.Fatalf("CreateRepoToken error = %v, want errRepoNotFound", err)
+	}
+}
+
+func assertCanonicalUUIDV4(t *testing.T, value string) {
+	t.Helper()
+	if len(value) != 36 {
+		t.Fatalf("uuid = %q, length %d, want 36", value, len(value))
+	}
+	dashIndexes := map[int]bool{8: true, 13: true, 18: true, 23: true}
+	for index, char := range value {
+		if dashIndexes[index] {
+			if char != '-' {
+				t.Fatalf("uuid = %q, want dash at index %d", value, index)
+			}
+			continue
+		}
+		if !isLowerHex(char) {
+			t.Fatalf("uuid = %q, want lowercase hex at index %d", value, index)
+		}
+	}
+	if value[14] != '4' {
+		t.Fatalf("uuid = %q, want version 4", value)
+	}
+	switch value[19] {
+	case '8', '9', 'a', 'b':
+	default:
+		t.Fatalf("uuid = %q, want RFC 4122 variant", value)
+	}
+}
+
+func isLowerHex(char rune) bool {
+	return (char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')
 }

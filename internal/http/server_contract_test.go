@@ -45,6 +45,7 @@ func TestControlAPIContract(t *testing.T) {
 		if got.ID == "" {
 			t.Fatal("id is empty")
 		}
+		assertExternalRepoID(t, got.ID)
 		if got.Repo != "differ/project-create" {
 			t.Fatalf("repo = %q, want differ/project-create", got.Repo)
 		}
@@ -115,8 +116,8 @@ func TestTokenProvisioningContract(t *testing.T) {
 		ControlBearer: "internal-admin-token",
 	})
 
-	t.Run("short lived internal token can read and write", func(t *testing.T) {
-		created := createRepoFixture(t, server, "internal-token")
+	t.Run("repo token can read and write", func(t *testing.T) {
+		created := createRepoFixture(t, server, "readwrite-token")
 		res, body := request(
 			t,
 			server,
@@ -124,7 +125,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 			"/v1/repos/"+created.ID+"/tokens",
 			controlAuthorization,
 			"application/json",
-			`{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc","kind":"internal"}`,
+			`{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc"}`,
 		)
 
 		requireStatus(t, res, body, http.StatusCreated)
@@ -133,42 +134,6 @@ func TestTokenProvisioningContract(t *testing.T) {
 			ExpiresAt string `json:"expiresAt"`
 			GitURL    string `json:"gitUrl"`
 			Scope     string `json:"scope"`
-			Kind      string `json:"kind"`
-		}
-		decodeJSON(t, res, body, &got)
-		if !strings.HasPrefix(got.Token, "gtd_") {
-			t.Fatalf("token = %q, want gtd_ prefix", got.Token)
-		}
-		if got.Scope != "readwrite" {
-			t.Fatalf("scope = %q, want readwrite", got.Scope)
-		}
-		if got.Kind != "internal" {
-			t.Fatalf("kind = %q, want internal", got.Kind)
-		}
-		assertFutureExpiryWithin(t, got.ExpiresAt, time.Hour)
-		if !strings.Contains(got.GitURL, got.Token+"@git.example.com/"+created.Repo+".git") {
-			t.Fatalf("gitUrl does not embed token for normal git clients: %q", got.GitURL)
-		}
-	})
-
-	t.Run("developer token supports longer direct push access", func(t *testing.T) {
-		created := createRepoFixture(t, server, "developer-token")
-		res, body := request(
-			t,
-			server,
-			http.MethodPost,
-			"/v1/repos/"+created.ID+"/tokens",
-			controlAuthorization,
-			"application/json",
-			`{"scope":"readwrite","ttlSeconds":604800,"subject":"dev@example.com","kind":"developer"}`,
-		)
-
-		requireStatus(t, res, body, http.StatusCreated)
-		var got struct {
-			Token     string `json:"token"`
-			ExpiresAt string `json:"expiresAt"`
-			Scope     string `json:"scope"`
-			Kind      string `json:"kind"`
 			Subject   string `json:"subject"`
 		}
 		decodeJSON(t, res, body, &got)
@@ -178,13 +143,104 @@ func TestTokenProvisioningContract(t *testing.T) {
 		if got.Scope != "readwrite" {
 			t.Fatalf("scope = %q, want readwrite", got.Scope)
 		}
-		if got.Kind != "developer" {
-			t.Fatalf("kind = %q, want developer", got.Kind)
+		if got.Subject != "differ-bootstrap-job-abc" {
+			t.Fatalf("subject = %q, want differ-bootstrap-job-abc", got.Subject)
 		}
-		if got.Subject != "dev@example.com" {
-			t.Fatalf("subject = %q, want dev@example.com", got.Subject)
+		assertFutureExpiryWithin(t, got.ExpiresAt, time.Hour)
+		if !strings.Contains(got.GitURL, "x-access-token:"+got.Token+"@git.example.com/"+created.Repo+".git") {
+			t.Fatalf("gitUrl does not embed token for normal git clients: %q", got.GitURL)
+		}
+
+		var raw map[string]any
+		decodeJSON(t, res, body, &raw)
+		if _, ok := raw["kind"]; ok {
+			t.Fatalf("response includes kind: %#v", raw)
+		}
+	})
+
+	t.Run("repo token can be issued for an external contributor subject", func(t *testing.T) {
+		created := createRepoFixture(t, server, "contributor-token")
+		res, body := request(
+			t,
+			server,
+			http.MethodPost,
+			"/v1/repos/"+created.ID+"/tokens",
+			controlAuthorization,
+			"application/json",
+			`{"scope":"write","ttlSeconds":604800,"subject":"external:dev@example.com"}`,
+		)
+
+		requireStatus(t, res, body, http.StatusCreated)
+		var got struct {
+			Token     string `json:"token"`
+			ExpiresAt string `json:"expiresAt"`
+			Scope     string `json:"scope"`
+			Subject   string `json:"subject"`
+		}
+		decodeJSON(t, res, body, &got)
+		if !strings.HasPrefix(got.Token, "gtd_") {
+			t.Fatalf("token = %q, want gtd_ prefix", got.Token)
+		}
+		if got.Scope != "write" {
+			t.Fatalf("scope = %q, want write", got.Scope)
+		}
+		if got.Subject != "external:dev@example.com" {
+			t.Fatalf("subject = %q, want external:dev@example.com", got.Subject)
 		}
 		assertFutureExpiryWithin(t, got.ExpiresAt, 7*24*time.Hour)
+	})
+
+	t.Run("repo token validates request shape", func(t *testing.T) {
+		created := createRepoFixture(t, server, "invalid-token")
+		tests := []struct {
+			name string
+			body string
+			want string
+		}{
+			{
+				name: "invalid scope",
+				body: `{"scope":"admin","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc"}`,
+				want: "scope must be read, write, or readwrite",
+			},
+			{
+				name: "missing subject",
+				body: `{"scope":"read","ttlSeconds":3600,"subject":"   "}`,
+				want: "subject is required",
+			},
+			{
+				name: "ttl too long",
+				body: `{"scope":"read","ttlSeconds":604801,"subject":"differ-bootstrap-job-abc"}`,
+				want: "ttlSeconds must be between 1 and 604800",
+			},
+			{
+				name: "kind is not part of the token model",
+				body: `{"scope":"read","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc","kind":"internal"}`,
+				want: "request body must be valid JSON for create repo token",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				res, body := request(
+					t,
+					server,
+					http.MethodPost,
+					"/v1/repos/"+created.ID+"/tokens",
+					controlAuthorization,
+					"application/json",
+					tt.body,
+				)
+
+				requireStatus(t, res, body, http.StatusBadRequest)
+				var got struct {
+					Error string `json:"error"`
+				}
+				decodeJSON(t, res, body, &got)
+				if got.Error != tt.want {
+					t.Fatalf("error = %q, want %q", got.Error, tt.want)
+				}
+			})
+		}
 	})
 }
 
@@ -224,7 +280,7 @@ func TestControlAuthContract(t *testing.T) {
 			method:      http.MethodPost,
 			target:      "/v1/repos/repo_123/tokens",
 			contentType: "application/json",
-			body:        `{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc","kind":"internal"}`,
+			body:        `{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc"}`,
 		},
 		{
 			name:        "control route rejects wrong bearer token",
@@ -338,6 +394,7 @@ func createRepoFixture(t *testing.T, server http.Handler, suffix string) created
 	if created.ID == "" {
 		t.Fatal("created repo id is empty")
 	}
+	assertExternalRepoID(t, created.ID)
 	if created.Repo != namespace+"/"+name {
 		t.Fatalf("created repo = %q, want %s/%s", created.Repo, namespace, name)
 	}
@@ -386,5 +443,24 @@ func assertFutureExpiryWithin(t *testing.T, value string, duration time.Duration
 	max := time.Now().Add(duration + time.Minute)
 	if expiresAt.Before(min) || expiresAt.After(max) {
 		t.Fatalf("expiresAt = %s, want within one minute of %s", expiresAt, duration)
+	}
+}
+
+func assertExternalRepoID(t *testing.T, value string) {
+	t.Helper()
+	if !strings.HasPrefix(value, "repo_") {
+		t.Fatalf("id = %q, want repo_ prefix", value)
+	}
+	uuid := strings.TrimPrefix(value, "repo_")
+	if len(uuid) != 36 {
+		t.Fatalf("uuid = %q, length %d, want 36", uuid, len(uuid))
+	}
+	if uuid[14] != '4' {
+		t.Fatalf("uuid = %q, want version 4", uuid)
+	}
+	switch uuid[19] {
+	case '8', '9', 'a', 'b':
+	default:
+		t.Fatalf("uuid = %q, want RFC 4122 variant", uuid)
 	}
 }
