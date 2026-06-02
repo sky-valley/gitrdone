@@ -40,6 +40,16 @@ type gitAccessAuthorizer interface {
 	AuthorizeGitAccess(ctx context.Context, input authorizeGitAccessInput) (gitAccessGrant, error)
 }
 
+type repoStore interface {
+	repoCreator
+	repoGetter
+	repoArchiver
+	repoTokenCreator
+	repoTokenLister
+	repoTokenRevoker
+	gitAccessAuthorizer
+}
+
 type createRepoInput struct {
 	Namespace     string
 	Name          string
@@ -188,6 +198,7 @@ func (store *memoryRepoStore) CreateRepo(ctx context.Context, input createRepoIn
 		return repoRecord{}, err
 	}
 	if err := store.gitStorage.InitBareRepo(ctx, repoID, input.DefaultBranch); err != nil {
+		_ = store.gitStorage.DeleteBareRepo(ctx, repoID)
 		return repoRecord{}, err
 	}
 	repo := repoRecord{

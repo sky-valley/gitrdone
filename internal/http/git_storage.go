@@ -13,12 +13,17 @@ const defaultGitStorageRoot = ".storage"
 
 type repoGitStorage interface {
 	InitBareRepo(ctx context.Context, repoID string, defaultBranch string) error
+	DeleteBareRepo(ctx context.Context, repoID string) error
 	BareRepoPath(ctx context.Context, repoID string) (string, error)
 }
 
 type noopRepoGitStorage struct{}
 
 func (noopRepoGitStorage) InitBareRepo(ctx context.Context, repoID string, defaultBranch string) error {
+	return nil
+}
+
+func (noopRepoGitStorage) DeleteBareRepo(ctx context.Context, repoID string) error {
 	return nil
 }
 
@@ -50,6 +55,13 @@ func (storage filesystemGitStorage) InitBareRepo(ctx context.Context, repoID str
 		return err
 	}
 	return nil
+}
+
+func (storage filesystemGitStorage) DeleteBareRepo(ctx context.Context, repoID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return os.RemoveAll(storage.repoPath(repoID))
 }
 
 func (storage filesystemGitStorage) BareRepoPath(ctx context.Context, repoID string) (string, error) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -28,6 +29,9 @@ func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
 	if cfg.controlBearer != "internal-admin-token" {
 		t.Fatalf("controlBearer = %q, want internal-admin-token", cfg.controlBearer)
 	}
+	if cfg.databaseURL != "" {
+		t.Fatalf("databaseURL = %q, want empty", cfg.databaseURL)
+	}
 }
 
 func TestConfigFromEnvUsesOverrides(t *testing.T) {
@@ -35,6 +39,7 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 		"GITRDONE_ADDR":           "127.0.0.1:9090",
 		"GITRDONE_BASE_URL":       "https://git.example.com",
 		"GITRDONE_CONTROL_BEARER": "internal-admin-token",
+		"GITRDONE_DATABASE_URL":   "postgres://gitrdone:secret@db.example.com:5432/gitrdone?sslmode=require",
 		"GITRDONE_STORAGE_ROOT":   "/var/lib/gitrdone",
 	}
 
@@ -57,6 +62,9 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	if cfg.controlBearer != "internal-admin-token" {
 		t.Fatalf("controlBearer = %q, want internal-admin-token", cfg.controlBearer)
 	}
+	if cfg.databaseURL != "postgres://gitrdone:secret@db.example.com:5432/gitrdone?sslmode=require" {
+		t.Fatalf("databaseURL = %q, want configured Postgres URL", cfg.databaseURL)
+	}
 }
 
 func TestConfigFromEnvRequiresControlBearer(t *testing.T) {
@@ -69,11 +77,19 @@ func TestConfigFromEnvRequiresControlBearer(t *testing.T) {
 }
 
 func TestHTTPServerUsesDefensiveTimeouts(t *testing.T) {
-	server := newHTTPServer(config{
+	server, closeServer, err := newHTTPServer(context.Background(), config{
 		addr:          "127.0.0.1:9090",
 		baseURL:       "https://git.example.com",
 		controlBearer: "internal-admin-token",
 		storageRoot:   t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := closeServer(); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	if server.ReadHeaderTimeout != 5*time.Second {

@@ -9,12 +9,18 @@ type Config struct {
 }
 
 func NewServer(config Config) http.Handler {
+	repos := newMemoryRepoStore(nil)
+	repos.gitStorage = newFilesystemGitStorage(config.StorageRoot)
+	return NewServerWithStores(config, repos, newMemoryIdempotencyStore(nil))
+}
+
+func NewServerWithStores(config Config, repos repoStore, idempotency idempotencyDoer) http.Handler {
 	control := func(handler http.Handler) http.Handler {
 		return controlAuth(config.ControlBearer, handler)
 	}
-	repos := newMemoryRepoStore(nil)
-	repos.gitStorage = newFilesystemGitStorage(config.StorageRoot)
-	idempotency := newMemoryIdempotencyStore(nil)
+	if idempotency == nil {
+		idempotency = newMemoryIdempotencyStore(nil)
+	}
 
 	return NewMux(Handlers{
 		AgentDocs:       agentDocsHandler(config.BaseURL),

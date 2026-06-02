@@ -333,6 +333,10 @@ func (storage fixedRepoGitStorage) InitBareRepo(ctx context.Context, repoID stri
 	return nil
 }
 
+func (storage fixedRepoGitStorage) DeleteBareRepo(ctx context.Context, repoID string) error {
+	return nil
+}
+
 func (storage fixedRepoGitStorage) BareRepoPath(ctx context.Context, repoID string) (string, error) {
 	return storage.path, nil
 }

@@ -12,7 +12,7 @@ const defaultIdempotencyRecordTTL = 24 * time.Hour
 var errIdempotencyConflict = errors.New("idempotency key conflict")
 
 type idempotencyDoer interface {
-	Do(ctx context.Context, input idempotencyInput, create func() (createRepoTokenResponse, error)) (idempotencyResult, error)
+	Do(ctx context.Context, input idempotencyInput, create func(context.Context) (createRepoTokenResponse, error)) (idempotencyResult, error)
 }
 
 type idempotencyInput struct {
@@ -55,12 +55,12 @@ func newMemoryIdempotencyStore(now func() time.Time) *memoryIdempotencyStore {
 	}
 }
 
-func (store *memoryIdempotencyStore) Do(ctx context.Context, input idempotencyInput, create func() (createRepoTokenResponse, error)) (idempotencyResult, error) {
+func (store *memoryIdempotencyStore) Do(ctx context.Context, input idempotencyInput, create func(context.Context) (createRepoTokenResponse, error)) (idempotencyResult, error) {
 	if err := ctx.Err(); err != nil {
 		return idempotencyResult{}, err
 	}
 	if input.Key == "" {
-		response, err := create()
+		response, err := create(ctx)
 		return idempotencyResult{Response: response}, err
 	}
 
@@ -85,7 +85,7 @@ func (store *memoryIdempotencyStore) Do(ctx context.Context, input idempotencyIn
 		delete(store.records, key)
 	}
 
-	response, err := create()
+	response, err := create(ctx)
 	if err != nil {
 		return idempotencyResult{}, err
 	}

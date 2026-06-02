@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -27,9 +28,11 @@ type config struct {
 	baseURL       string
 	controlBearer string
 	storageRoot   string
+	databaseURL   string
 }
 
 func main() {
+	ctx := context.Background()
 	cfg, err := configFromEnv(os.Getenv)
 	if err != nil {
 		log.Fatal(err)
@@ -39,7 +42,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := newHTTPServer(cfg)
+	server, closeServer, err := newHTTPServer(ctx, cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := closeServer(); err != nil {
+			log.Printf("close server resources: %v", err)
+		}
+	}()
 
 	log.Printf("gitrdone listening on %s, storage=%s", cfg.addr, storageRoot)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -47,18 +58,34 @@ func main() {
 	}
 }
 
-func newHTTPServer(cfg config) *http.Server {
-	return &http.Server{
-		Addr: cfg.addr,
-		Handler: httpapi.NewServer(httpapi.Config{
+func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error, error) {
+	handler := httpapi.NewServer(httpapi.Config{
+		BaseURL:       cfg.baseURL,
+		ControlBearer: cfg.controlBearer,
+		StorageRoot:   cfg.storageRoot,
+	})
+	closeServer := func() error {
+		return nil
+	}
+	if cfg.databaseURL != "" {
+		postgresHandler, closePostgres, err := httpapi.NewPostgresServer(ctx, httpapi.Config{
 			BaseURL:       cfg.baseURL,
 			ControlBearer: cfg.controlBearer,
 			StorageRoot:   cfg.storageRoot,
-		}),
+		}, cfg.databaseURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		handler = postgresHandler
+		closeServer = closePostgres
+	}
+	return &http.Server{
+		Addr:              cfg.addr,
+		Handler:           handler,
 		ReadHeaderTimeout: defaultReadHeaderTimeout,
 		IdleTimeout:       defaultIdleTimeout,
 		MaxHeaderBytes:    defaultMaxHeaderBytes,
-	}
+	}, closeServer, nil
 }
 
 func configFromEnv(getenv func(string) string) (config, error) {
@@ -66,6 +93,7 @@ func configFromEnv(getenv func(string) string) (config, error) {
 		addr:          strings.TrimSpace(getenv("GITRDONE_ADDR")),
 		baseURL:       strings.TrimSpace(getenv("GITRDONE_BASE_URL")),
 		controlBearer: strings.TrimSpace(getenv("GITRDONE_CONTROL_BEARER")),
+		databaseURL:   strings.TrimSpace(getenv("GITRDONE_DATABASE_URL")),
 		storageRoot:   strings.TrimSpace(getenv("GITRDONE_STORAGE_ROOT")),
 	}
 	if cfg.addr == "" {

@@ -25,7 +25,7 @@ Tool mapping:
 
 ## Project Guidance
 
-- Giterdone is a generic Git artifact service. Keep Differ domain concepts such as divergences, recommendations, and runtime users out of its core model unless they are opaque caller metadata.
+- gitrdone is a generic Git artifact service. Keep Differ domain concepts such as divergences, recommendations, and runtime users out of its core model unless they are opaque caller metadata.
 - Control API identity is the repo ID. Repo names are labels and Git-facing locator components, not canonical control identifiers.
 - Keep HTTP handlers thin over small interfaces. Put lifecycle behavior in repository/service implementations and keep request/response mapping in handlers.
 - Work red-green for implementation changes: add or update focused tests first, confirm the failure, then implement the smallest change that makes them pass.

@@ -18,14 +18,14 @@ func TestMemoryIdempotencyStoreReplaysSameRequest(t *testing.T) {
 	}
 	createCalls := 0
 
-	first, err := store.Do(context.Background(), input, func() (createRepoTokenResponse, error) {
+	first, err := store.Do(context.Background(), input, func(context.Context) (createRepoTokenResponse, error) {
 		createCalls++
 		return createRepoTokenResponse{Token: "gtd_first", Scope: "read"}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.Do(context.Background(), input, func() (createRepoTokenResponse, error) {
+	second, err := store.Do(context.Background(), input, func(context.Context) (createRepoTokenResponse, error) {
 		createCalls++
 		return createRepoTokenResponse{Token: "gtd_second", Scope: "read"}, nil
 	})
@@ -57,7 +57,7 @@ func TestMemoryIdempotencyStoreConflictsOnChangedRequest(t *testing.T) {
 		Key:         "differ:run_123:push-token",
 		RequestHash: "request-a",
 	}
-	_, err := store.Do(context.Background(), input, func() (createRepoTokenResponse, error) {
+	_, err := store.Do(context.Background(), input, func(context.Context) (createRepoTokenResponse, error) {
 		return createRepoTokenResponse{Token: "gtd_first"}, nil
 	})
 	if err != nil {
@@ -66,7 +66,7 @@ func TestMemoryIdempotencyStoreConflictsOnChangedRequest(t *testing.T) {
 
 	conflicting := input
 	conflicting.RequestHash = "request-b"
-	_, err = store.Do(context.Background(), conflicting, func() (createRepoTokenResponse, error) {
+	_, err = store.Do(context.Background(), conflicting, func(context.Context) (createRepoTokenResponse, error) {
 		return createRepoTokenResponse{Token: "gtd_second"}, nil
 	})
 
@@ -85,13 +85,13 @@ func TestMemoryIdempotencyStoreScopesKeys(t *testing.T) {
 	secondScope := firstScope
 	secondScope.Scope = "POST /v1/repos/repo_00000000-0000-4000-8000-000000000002/tokens"
 
-	first, err := store.Do(context.Background(), firstScope, func() (createRepoTokenResponse, error) {
+	first, err := store.Do(context.Background(), firstScope, func(context.Context) (createRepoTokenResponse, error) {
 		return createRepoTokenResponse{Token: "gtd_first"}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.Do(context.Background(), secondScope, func() (createRepoTokenResponse, error) {
+	second, err := store.Do(context.Background(), secondScope, func(context.Context) (createRepoTokenResponse, error) {
 		return createRepoTokenResponse{Token: "gtd_second"}, nil
 	})
 	if err != nil {
@@ -117,14 +117,14 @@ func TestMemoryIdempotencyStoreExpiresResponseCache(t *testing.T) {
 		RequestHash: "request-a",
 	}
 
-	first, err := store.Do(context.Background(), input, func() (createRepoTokenResponse, error) {
+	first, err := store.Do(context.Background(), input, func(context.Context) (createRepoTokenResponse, error) {
 		return createRepoTokenResponse{Token: "gtd_first"}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(defaultIdempotencyRecordTTL + time.Second)
-	second, err := store.Do(context.Background(), input, func() (createRepoTokenResponse, error) {
+	second, err := store.Do(context.Background(), input, func(context.Context) (createRepoTokenResponse, error) {
 		return createRepoTokenResponse{Token: "gtd_second"}, nil
 	})
 	if err != nil {

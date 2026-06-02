@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -82,8 +83,8 @@ func createRepoTokenHandler(tokens repoTokenCreator, idempotency idempotencyDoer
 			return
 		}
 
-		create := func() (createRepoTokenResponse, error) {
-			token, err := tokens.CreateRepoToken(r.Context(), createRepoTokenInput{
+		create := func(createCtx context.Context) (createRepoTokenResponse, error) {
+			token, err := tokens.CreateRepoToken(createCtx, createRepoTokenInput{
 				RepoID:     repoID,
 				Scope:      request.Scope,
 				Subject:    request.Subject,
@@ -117,7 +118,7 @@ func createRepoTokenHandler(tokens repoTokenCreator, idempotency idempotencyDoer
 			return
 		}
 
-		response, err := create()
+		response, err := create(r.Context())
 		if err != nil {
 			writeCreateRepoTokenError(w, err)
 			return

@@ -22,6 +22,7 @@ Defaults:
 | `GITRDONE_ADDR` | `:8080` | HTTP listen address |
 | `GITRDONE_BASE_URL` | `http://localhost:8080` | Base URL used in API responses and docs |
 | `GITRDONE_STORAGE_ROOT` | `.storage` | Filesystem root for bare Git repos |
+| `GITRDONE_DATABASE_URL` | unset | Postgres URL for durable control metadata |
 | `GITRDONE_CONTROL_BEARER` | required | Bearer token for `/v1` control routes |
 
 The service logs the absolute storage root on startup.
@@ -29,8 +30,9 @@ The service logs the absolute storage root on startup.
 ## Storage Model
 
 - Bare Git repos are stored under `<storage-root>/repos/{uuid}.git`.
-- Control metadata and repo tokens are currently in memory.
-- If the process restarts, existing bare repos remain on disk, but control metadata and tokens are not restored.
+- Without `GITRDONE_DATABASE_URL`, control metadata and repo tokens are kept in memory.
+- With `GITRDONE_DATABASE_URL`, repo metadata, token hashes, token lifecycle timestamps, and idempotency records are stored in Postgres.
+- Bare repos still need durable filesystem storage even when Postgres is enabled.
 
 ## Control API
 
@@ -154,4 +156,10 @@ GET /healthz
 go test ./...
 go vet ./...
 go test -race ./...
+```
+
+Postgres contract test:
+
+```bash
+scripts/test-postgres.sh
 ```
