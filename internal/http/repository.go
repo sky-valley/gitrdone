@@ -27,6 +27,10 @@ type repoTokenCreator interface {
 	CreateRepoToken(ctx context.Context, input createRepoTokenInput) (repoTokenRecord, error)
 }
 
+type gitAccessAuthorizer interface {
+	AuthorizeGitAccess(ctx context.Context, input authorizeGitAccessInput) (gitAccessGrant, error)
+}
+
 type createRepoInput struct {
 	Namespace     string
 	Name          string
@@ -46,6 +50,24 @@ type createRepoTokenInput struct {
 	Scope      string
 	Subject    string
 	TTLSeconds int
+}
+
+type gitOperation string
+
+const (
+	gitOperationRead  gitOperation = "read"
+	gitOperationWrite gitOperation = "write"
+)
+
+type authorizeGitAccessInput struct {
+	RepoID    string
+	Token     string
+	Operation gitOperation
+}
+
+type gitAccessGrant struct {
+	RepoID   string
+	RepoPath string
 }
 
 type repoRecord struct {
@@ -71,6 +93,10 @@ type repoTokenRecord struct {
 
 var errRepositoryNotImplemented = errors.New("repository not implemented")
 var errRepoNotFound = errors.New("repo not found")
+var errRepoArchived = errors.New("repo archived")
+var errRepoTokenInvalid = errors.New("repo token invalid")
+var errRepoTokenForbidden = errors.New("repo token forbidden")
+var errRepoStorageNotFound = errors.New("repo storage not found")
 
 type failingRepoStore struct{}
 
@@ -88,6 +114,10 @@ func (failingRepoStore) ArchiveRepo(ctx context.Context, input archiveRepoInput)
 
 func (failingRepoStore) CreateRepoToken(ctx context.Context, input createRepoTokenInput) (repoTokenRecord, error) {
 	return repoTokenRecord{}, errRepositoryNotImplemented
+}
+
+func (failingRepoStore) AuthorizeGitAccess(ctx context.Context, input authorizeGitAccessInput) (gitAccessGrant, error) {
+	return gitAccessGrant{}, errRepositoryNotImplemented
 }
 
 type memoryRepoStore struct {
@@ -199,6 +229,55 @@ func (store *memoryRepoStore) CreateRepoToken(ctx context.Context, input createR
 	store.tokens[record.ID] = stored
 	store.tokenIDsByHash[record.TokenHash] = record.ID
 	return record, nil
+}
+
+func (store *memoryRepoStore) AuthorizeGitAccess(ctx context.Context, input authorizeGitAccessInput) (gitAccessGrant, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	repo, ok := store.repos[input.RepoID]
+	if !ok {
+		return gitAccessGrant{}, errRepoNotFound
+	}
+	if !repo.ArchivedAt.IsZero() {
+		return gitAccessGrant{}, errRepoArchived
+	}
+	if input.Token == "" {
+		return gitAccessGrant{}, errRepoTokenInvalid
+	}
+	tokenID, ok := store.tokenIDsByHash[hashRepoToken(input.Token)]
+	if !ok {
+		return gitAccessGrant{}, errRepoTokenInvalid
+	}
+	token := store.tokens[tokenID]
+	if token.RepoID != repo.ID {
+		return gitAccessGrant{}, errRepoTokenInvalid
+	}
+	if !store.now().Before(token.ExpiresAt) {
+		return gitAccessGrant{}, errRepoTokenInvalid
+	}
+	if !scopeAllowsGitOperation(token.Scope, input.Operation) {
+		return gitAccessGrant{}, errRepoTokenForbidden
+	}
+	repoPath, err := store.gitStorage.BareRepoPath(ctx, repo.ID)
+	if err != nil {
+		return gitAccessGrant{}, err
+	}
+	return gitAccessGrant{
+		RepoID:   repo.ID,
+		RepoPath: repoPath,
+	}, nil
+}
+
+func scopeAllowsGitOperation(scope string, operation gitOperation) bool {
+	switch operation {
+	case gitOperationRead:
+		return scope == "read" || scope == "readwrite"
+	case gitOperationWrite:
+		return scope == "write" || scope == "readwrite"
+	default:
+		return false
+	}
 }
 
 func newUUID() (string, error) {

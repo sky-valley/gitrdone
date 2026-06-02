@@ -13,12 +13,17 @@ const defaultGitStorageRoot = ".storage"
 
 type repoGitStorage interface {
 	InitBareRepo(ctx context.Context, repoID string, defaultBranch string) error
+	BareRepoPath(ctx context.Context, repoID string) (string, error)
 }
 
 type noopRepoGitStorage struct{}
 
 func (noopRepoGitStorage) InitBareRepo(ctx context.Context, repoID string, defaultBranch string) error {
 	return nil
+}
+
+func (noopRepoGitStorage) BareRepoPath(ctx context.Context, repoID string) (string, error) {
+	return "", errRepoStorageNotFound
 }
 
 type filesystemGitStorage struct {
@@ -45,6 +50,18 @@ func (storage filesystemGitStorage) InitBareRepo(ctx context.Context, repoID str
 		return err
 	}
 	return nil
+}
+
+func (storage filesystemGitStorage) BareRepoPath(ctx context.Context, repoID string) (string, error) {
+	repoPath := storage.repoPath(repoID)
+	info, err := os.Stat(repoPath)
+	if err != nil {
+		return "", errRepoStorageNotFound
+	}
+	if !info.IsDir() {
+		return "", errRepoStorageNotFound
+	}
+	return repoPath, nil
 }
 
 func (storage filesystemGitStorage) repoPath(repoID string) string {
