@@ -6,6 +6,7 @@ import (
 )
 
 type Handlers struct {
+	AgentDocs       http.Handler
 	Healthz         http.Handler
 	CreateRepo      http.Handler
 	GetRepo         http.Handler
@@ -16,6 +17,21 @@ type Handlers struct {
 
 func NewMux(h Handlers) *http.ServeMux {
 	mux := http.NewServeMux()
+
+	agentDocs := h.AgentDocs
+	if agentDocs == nil {
+		agentDocs = http.NotFoundHandler()
+	}
+	mux.Handle("GET /", agentDocs)
+	mux.Handle("GET /llms.txt", agentDocs)
+	mux.Handle("GET /.well-known/llms.txt", agentDocs)
+	mux.Handle("GET /AGENTS.md", agentDocs)
+	mux.Handle("GET /agents.md", agentDocs)
+	mux.Handle("GET /.well-known/agents.md", agentDocs)
+	mux.Handle("GET /llms-full.txt", agentDocs)
+	mux.Handle("GET /robots.txt", agentDocs)
+	mux.Handle("GET /sitemap.md", agentDocs)
+	mux.Handle("GET /sitemap.xml", agentDocs)
 
 	mux.Handle("GET /healthz", h.Healthz)
 

@@ -16,6 +16,7 @@ func NewServer(config Config) http.Handler {
 	repos.gitStorage = newFilesystemGitStorage(config.StorageRoot)
 
 	return NewMux(Handlers{
+		AgentDocs:       agentDocsHandler(config.BaseURL),
 		Healthz:         noContent(),
 		CreateRepo:      control(createRepoHandler(repos, config.BaseURL)),
 		GetRepo:         control(getRepoHandler(repos, config.BaseURL)),
