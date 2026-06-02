@@ -41,7 +41,7 @@ func main() {
 
 	server := newHTTPServer(cfg)
 
-	log.Printf("giterdone listening on %s, storage=%s", cfg.addr, storageRoot)
+	log.Printf("gitrdone listening on %s, storage=%s", cfg.addr, storageRoot)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -63,10 +63,10 @@ func newHTTPServer(cfg config) *http.Server {
 
 func configFromEnv(getenv func(string) string) (config, error) {
 	cfg := config{
-		addr:          strings.TrimSpace(getenv("GITERDONE_ADDR")),
-		baseURL:       strings.TrimSpace(getenv("GITERDONE_BASE_URL")),
-		controlBearer: strings.TrimSpace(getenv("GITERDONE_CONTROL_BEARER")),
-		storageRoot:   strings.TrimSpace(getenv("GITERDONE_STORAGE_ROOT")),
+		addr:          strings.TrimSpace(getenv("GITRDONE_ADDR")),
+		baseURL:       strings.TrimSpace(getenv("GITRDONE_BASE_URL")),
+		controlBearer: strings.TrimSpace(getenv("GITRDONE_CONTROL_BEARER")),
+		storageRoot:   strings.TrimSpace(getenv("GITRDONE_STORAGE_ROOT")),
 	}
 	if cfg.addr == "" {
 		cfg.addr = defaultAddr
@@ -78,7 +78,7 @@ func configFromEnv(getenv func(string) string) (config, error) {
 		cfg.storageRoot = defaultStorageRoot
 	}
 	if cfg.controlBearer == "" {
-		return config{}, errors.New("GITERDONE_CONTROL_BEARER is required")
+		return config{}, errors.New("GITRDONE_CONTROL_BEARER is required")
 	}
 	return cfg, nil
 }

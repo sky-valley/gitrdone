@@ -152,7 +152,7 @@ func newGitWorktree(t *testing.T, filename string, content string) string {
 	worktree := t.TempDir()
 	requireGitSuccess(t, "init worktree", "-C", worktree, "init")
 	requireGitSuccess(t, "create main branch", "-C", worktree, "checkout", "-b", "main")
-	requireGitSuccess(t, "configure test email", "-C", worktree, "config", "user.email", "giterdone-tests@example.com")
+	requireGitSuccess(t, "configure test email", "-C", worktree, "config", "user.email", "gitrdone-tests@example.com")
 	requireGitSuccess(t, "configure test name", "-C", worktree, "config", "user.name", "Giterdone Tests")
 	writeGitFile(t, worktree, filename, content)
 	requireGitSuccess(t, "commit initial file", "-C", worktree, "add", filename)

@@ -1,8 +1,8 @@
-# giterdone
+# gitrdone
 
 Authenticated Git smart HTTP with a small control API for repo-backed workflows.
 
-giterdone is intentionally narrow: it creates backing Git repos, mints repo-scoped access tokens, and serves those repos over normal Git HTTP routes. Higher-level product concepts belong in the caller.
+gitrdone is intentionally narrow: it creates backing Git repos, mints repo-scoped access tokens, and serves those repos over normal Git HTTP routes. Higher-level product concepts belong in the caller.
 
 ## Requirements
 
@@ -12,17 +12,17 @@ giterdone is intentionally narrow: it creates backing Git repos, mints repo-scop
 ## Run Locally
 
 ```bash
-GITERDONE_CONTROL_BEARER=dev-control-token go run ./cmd/giterdone
+GITRDONE_CONTROL_BEARER=dev-control-token go run ./cmd/gitrdone
 ```
 
 Defaults:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GITERDONE_ADDR` | `:8080` | HTTP listen address |
-| `GITERDONE_BASE_URL` | `http://localhost:8080` | Base URL used in API responses and docs |
-| `GITERDONE_STORAGE_ROOT` | `.storage` | Filesystem root for bare Git repos |
-| `GITERDONE_CONTROL_BEARER` | required | Bearer token for `/v1` control routes |
+| `GITRDONE_ADDR` | `:8080` | HTTP listen address |
+| `GITRDONE_BASE_URL` | `http://localhost:8080` | Base URL used in API responses and docs |
+| `GITRDONE_STORAGE_ROOT` | `.storage` | Filesystem root for bare Git repos |
+| `GITRDONE_CONTROL_BEARER` | required | Bearer token for `/v1` control routes |
 
 The service logs the absolute storage root on startup.
 
@@ -37,7 +37,7 @@ The service logs the absolute storage root on startup.
 All `/v1` routes require:
 
 ```http
-Authorization: Bearer <GITERDONE_CONTROL_BEARER>
+Authorization: Bearer <GITRDONE_CONTROL_BEARER>
 ```
 
 Create a repo:

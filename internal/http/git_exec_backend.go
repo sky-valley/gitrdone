@@ -86,7 +86,7 @@ func gitRemoteUser(grant gitAccessGrant) string {
 	if grant.Subject != "" {
 		return grant.Subject
 	}
-	return "giterdone"
+	return "gitrdone"
 }
 
 func copyGitBackendResponse(w http.ResponseWriter, stdout io.Reader) (bool, error) {

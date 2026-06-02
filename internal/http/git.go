@@ -117,6 +117,6 @@ func writeGitAccessError(w http.ResponseWriter, err error) {
 }
 
 func writeGitUnauthorized(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="giterdone"`)
+	w.Header().Set("WWW-Authenticate", `Basic realm="gitrdone"`)
 	http.Error(w, "repo token is required", http.StatusUnauthorized)
 }

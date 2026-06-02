@@ -44,11 +44,11 @@ func newAgentDocs(baseURL string) agentDocs {
 		baseURL = "http://localhost:8080"
 	}
 
-	agents := fmt.Sprintf(`# giterdone Agent Guide
+	agents := fmt.Sprintf(`# gitrdone Agent Guide
 
-> giterdone is an authenticated Git smart HTTP service with a small control API for creating backing Git repos and repo-scoped access tokens.
+> gitrdone is an authenticated Git smart HTTP service with a small control API for creating backing Git repos and repo-scoped access tokens.
 
-Use this guide when acting as an automated agent against giterdone. giterdone is intentionally lower-level than Differ: it serves Git repos, tokens, and Git smart HTTP. Product concepts such as stems, divergences, adaptations, and app ownership belong in Differ.
+Use this guide when acting as an automated agent against gitrdone. gitrdone is intentionally lower-level than Differ: it serves Git repos, tokens, and Git smart HTTP. Product concepts such as stems, divergences, adaptations, and app ownership belong in Differ.
 
 ## Discovery
 
@@ -83,7 +83,7 @@ Idempotency-Key: differ:divergence:div_456:push-token
 Idempotency-Key: differ:adaptation-run:run_789:stem-write-token
 `+"```"+`
 
-Reuse the same key only for the same repo, scope, subject, and TTL. If the same key is reused for a different token request, giterdone returns 409 Conflict; do not blindly retry that conflict.
+Reuse the same key only for the same repo, scope, subject, and TTL. If the same key is reused for a different token request, gitrdone returns 409 Conflict; do not blindly retry that conflict.
 
 ## Token lifecycle
 
@@ -149,14 +149,14 @@ repoID is the external control ID, for example repo_00000000-0000-4000-8000-0000
 - Do not use namespace/name Git routes. They are not canonical.
 - Do not scrape storage paths. Bare repo paths are internal implementation details.
 - Do not assume anonymous repo access. Git access requires repo tokens.
-- Do not treat Differ concepts as giterdone concepts. giterdone does not know stems, divergences, adaptations, apps, or logged-in product users.
+- Do not treat Differ concepts as gitrdone concepts. gitrdone does not know stems, divergences, adaptations, apps, or logged-in product users.
 `, baseURL)
 
-	llms := fmt.Sprintf(`# giterdone
+	llms := fmt.Sprintf(`# gitrdone
 
-> giterdone is an authenticated Git smart HTTP service with a small control API for creating backing Git repos and repo-scoped access tokens.
+> gitrdone is an authenticated Git smart HTTP service with a small control API for creating backing Git repos and repo-scoped access tokens.
 
-giterdone is intended to be used by Differ services and trusted agents as a Git backend. Use canonical repo IDs, not namespace/name, as the Git identity. Public discovery files are safe to scrape. Control and Git operations require the appropriate tokens.
+gitrdone is intended to be used by Differ services and trusted agents as a Git backend. Use canonical repo IDs, not namespace/name, as the Git identity. Public discovery files are safe to scrape. Control and Git operations require the appropriate tokens.
 
 For retriable automation, include Idempotency-Key on token creation and derive it from the stable logical operation.
 
@@ -184,9 +184,9 @@ List and revoke repo tokens with the control bearer token; token values are retu
 - [XML sitemap](%[1]s/sitemap.xml)
 `, baseURL)
 
-	root := fmt.Sprintf(`# giterdone
+	root := fmt.Sprintf(`# gitrdone
 
-giterdone serves authenticated Git smart HTTP for repo-ID-addressed backing repos.
+gitrdone serves authenticated Git smart HTTP for repo-ID-addressed backing repos.
 
 Agent entrypoints:
 
@@ -216,7 +216,7 @@ Allow: /sitemap.md
 Sitemap: %[1]s/sitemap.xml
 `, baseURL)
 
-	sitemapMD := fmt.Sprintf(`# giterdone sitemap
+	sitemapMD := fmt.Sprintf(`# gitrdone sitemap
 
 - [Root](%[1]s/)
 - [llms.txt](%[1]s/llms.txt)

@@ -117,7 +117,7 @@ func TestNotImplementedGitHTTPBackend(t *testing.T) {
 }
 
 func TestGitHTTPBackendEnvDoesNotInheritProcessSecrets(t *testing.T) {
-	t.Setenv("GITERDONE_CONTROL_BEARER", "secret-control-token")
+	t.Setenv("GITRDONE_CONTROL_BEARER", "secret-control-token")
 	t.Setenv("GIT_CONFIG_GLOBAL", "/tmp/malicious-gitconfig")
 
 	req := httptest.NewRequest(http.MethodGet, "/git/repos/repo_00000000-0000-4000-8000-000000000001.git/info/refs?service=git-upload-pack", nil)
@@ -131,7 +131,7 @@ func TestGitHTTPBackendEnvDoesNotInheritProcessSecrets(t *testing.T) {
 
 	env := gitHTTPBackendEnv(req, grant)
 
-	if got, ok := envValue(env, "GITERDONE_CONTROL_BEARER"); ok {
+	if got, ok := envValue(env, "GITRDONE_CONTROL_BEARER"); ok {
 		t.Fatalf("backend env inherited control bearer: %q", got)
 	}
 	if got := envValueOrEmpty(env, "GIT_CONFIG_GLOBAL"); got != os.DevNull {
@@ -155,7 +155,7 @@ func TestRunGitDoesNotInheritProcessSecrets(t *testing.T) {
 	binDir := t.TempDir()
 	fakeGit := filepath.Join(binDir, "git")
 	script := `#!/bin/sh
-printf 'control=%s\n' "${GITERDONE_CONTROL_BEARER-}"
+printf 'control=%s\n' "${GITRDONE_CONTROL_BEARER-}"
 printf 'global=%s\n' "${GIT_CONFIG_GLOBAL-}"
 exit 1
 `
@@ -164,7 +164,7 @@ exit 1
 	}
 
 	t.Setenv("PATH", binDir)
-	t.Setenv("GITERDONE_CONTROL_BEARER", "secret-control-token")
+	t.Setenv("GITRDONE_CONTROL_BEARER", "secret-control-token")
 	t.Setenv("GIT_CONFIG_GLOBAL", "/tmp/malicious-gitconfig")
 
 	err := runGit(context.Background(), "env-check")

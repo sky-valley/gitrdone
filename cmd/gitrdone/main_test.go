@@ -7,7 +7,7 @@ import (
 
 func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
 	cfg, err := configFromEnv(func(key string) string {
-		if key == "GITERDONE_CONTROL_BEARER" {
+		if key == "GITRDONE_CONTROL_BEARER" {
 			return "internal-admin-token"
 		}
 		return ""
@@ -32,10 +32,10 @@ func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
 
 func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	values := map[string]string{
-		"GITERDONE_ADDR":           "127.0.0.1:9090",
-		"GITERDONE_BASE_URL":       "https://git.example.com",
-		"GITERDONE_CONTROL_BEARER": "internal-admin-token",
-		"GITERDONE_STORAGE_ROOT":   "/var/lib/giterdone",
+		"GITRDONE_ADDR":           "127.0.0.1:9090",
+		"GITRDONE_BASE_URL":       "https://git.example.com",
+		"GITRDONE_CONTROL_BEARER": "internal-admin-token",
+		"GITRDONE_STORAGE_ROOT":   "/var/lib/gitrdone",
 	}
 
 	cfg, err := configFromEnv(func(key string) string {
@@ -51,8 +51,8 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	if cfg.baseURL != "https://git.example.com" {
 		t.Fatalf("baseURL = %q, want https://git.example.com", cfg.baseURL)
 	}
-	if cfg.storageRoot != "/var/lib/giterdone" {
-		t.Fatalf("storageRoot = %q, want /var/lib/giterdone", cfg.storageRoot)
+	if cfg.storageRoot != "/var/lib/gitrdone" {
+		t.Fatalf("storageRoot = %q, want /var/lib/gitrdone", cfg.storageRoot)
 	}
 	if cfg.controlBearer != "internal-admin-token" {
 		t.Fatalf("controlBearer = %q, want internal-admin-token", cfg.controlBearer)

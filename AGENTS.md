@@ -1,4 +1,4 @@
-# AGENTS.md instructions for /Users/noam/work/skyvalley/giterdone
+# AGENTS.md instructions for /Users/noam/work/skyvalley/gitrdone
 
 <INSTRUCTIONS>
 <!-- BEGIN COMPOUND CODEX TOOL MAP -->
