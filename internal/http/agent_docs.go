@@ -85,6 +85,14 @@ Idempotency-Key: differ:adaptation-run:run_789:stem-write-token
 
 Reuse the same key only for the same repo, scope, subject, and TTL. If the same key is reused for a different token request, giterdone returns 409 Conflict; do not blindly retry that conflict.
 
+## Token lifecycle
+
+List and revoke responses return token metadata only; token values are returned only at creation. Keep the token id returned by token creation if the workflow may need to revoke or audit that grant later.
+
+Use GET /v1/repos/{repoID}/tokens to inspect token ids, scopes, subjects, expiration times, revocation times, and last-use times for a repo. Use POST /v1/repos/{repoID}/tokens/{tokenID}/revoke to revoke a repo token. Revocation is repo-scoped; do not try to revoke a token through a different repo.
+
+Revoke tokens when a workflow is done or when a token may have leaked. If work must continue after revocation, mint a fresh token for the new logical operation.
+
 ## Agent-safe surfaces
 
 Public discovery:
@@ -106,6 +114,8 @@ Control API for trusted Differ services:
 - POST /v1/repos
 - GET /v1/repos/{repoID}
 - POST /v1/repos/{repoID}/tokens
+- GET /v1/repos/{repoID}/tokens
+- POST /v1/repos/{repoID}/tokens/{tokenID}/revoke
 - POST /v1/repos/{repoID}/archive
 
 Git smart HTTP for normal Git clients:
@@ -150,6 +160,8 @@ giterdone is intended to be used by Differ services and trusted agents as a Git 
 
 For retriable automation, include Idempotency-Key on token creation and derive it from the stable logical operation.
 
+List and revoke repo tokens with the control bearer token; token values are returned only at creation.
+
 ## Agent Docs
 
 - [Agent guide](%[1]s/AGENTS.md): Full machine-readable guide for agents using this service.
@@ -162,7 +174,8 @@ For retriable automation, include Idempotency-Key on token creation and derive i
 
 - [Health](%[1]s/healthz): Minimal service health check.
 - [Create repo](%[1]s/v1/repos): POST with control bearer token.
-- [Repo tokens](%[1]s/v1/repos/{repoID}/tokens): POST with control bearer token.
+- [Repo tokens](%[1]s/v1/repos/{repoID}/tokens): POST to create; GET to list metadata with control bearer token.
+- [Revoke repo token](%[1]s/v1/repos/{repoID}/tokens/{tokenID}/revoke): POST with control bearer token.
 - [Git smart HTTP](%[1]s/git/repos/{repoID}.git): Use normal Git commands with repo-scoped tokens.
 
 ## Optional

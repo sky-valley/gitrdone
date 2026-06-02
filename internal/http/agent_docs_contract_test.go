@@ -38,6 +38,7 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 		requireBodyIncludes(t, body, "[Agent guide](https://git.example.com/AGENTS.md)")
 		requireBodyIncludes(t, body, "[Git smart HTTP](https://git.example.com/git/repos/{repoID}.git)")
 		requireBodyIncludes(t, body, "For retriable automation, include Idempotency-Key on token creation")
+		requireBodyIncludes(t, body, "List and revoke repo tokens with the control bearer token; token values are returned only at creation.")
 	})
 
 	t.Run("well-known llms txt aliases root llms txt", func(t *testing.T) {
@@ -61,11 +62,16 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 				requireNoSniff(t, res)
 				requireBodyIncludes(t, body, "## Agent-safe surfaces")
 				requireBodyIncludes(t, body, "POST /v1/repos/{repoID}/tokens")
+				requireBodyIncludes(t, body, "GET /v1/repos/{repoID}/tokens")
+				requireBodyIncludes(t, body, "POST /v1/repos/{repoID}/tokens/{tokenID}/revoke")
 				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/info/refs?service=git-upload-pack")
 				requireBodyIncludes(t, body, "## Reliable token creation")
 				requireBodyIncludes(t, body, "Idempotency-Key: differ:import:imp_123:source-read-token")
 				requireBodyIncludes(t, body, "Reuse the same key only for the same repo, scope, subject, and TTL.")
 				requireBodyIncludes(t, body, "If the same key is reused for a different token request, giterdone returns 409 Conflict")
+				requireBodyIncludes(t, body, "## Token lifecycle")
+				requireBodyIncludes(t, body, "List and revoke responses return token metadata only; token values are returned only at creation.")
+				requireBodyIncludes(t, body, "Revoke tokens when a workflow is done or when a token may have leaked.")
 				requireBodyIncludes(t, body, "Do not use namespace/name Git routes")
 			})
 		}
