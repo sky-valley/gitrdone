@@ -37,6 +37,7 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 		requireBodyIncludes(t, body, "> giterdone is an authenticated Git smart HTTP service")
 		requireBodyIncludes(t, body, "[Agent guide](https://git.example.com/AGENTS.md)")
 		requireBodyIncludes(t, body, "[Git smart HTTP](https://git.example.com/git/repos/{repoID}.git)")
+		requireBodyIncludes(t, body, "For retriable automation, include Idempotency-Key on token creation")
 	})
 
 	t.Run("well-known llms txt aliases root llms txt", func(t *testing.T) {
@@ -61,6 +62,10 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 				requireBodyIncludes(t, body, "## Agent-safe surfaces")
 				requireBodyIncludes(t, body, "POST /v1/repos/{repoID}/tokens")
 				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/info/refs?service=git-upload-pack")
+				requireBodyIncludes(t, body, "## Reliable token creation")
+				requireBodyIncludes(t, body, "Idempotency-Key: differ:import:imp_123:source-read-token")
+				requireBodyIncludes(t, body, "Reuse the same key only for the same repo, scope, subject, and TTL.")
+				requireBodyIncludes(t, body, "If the same key is reused for a different token request, giterdone returns 409 Conflict")
 				requireBodyIncludes(t, body, "Do not use namespace/name Git routes")
 			})
 		}

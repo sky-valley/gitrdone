@@ -71,6 +71,20 @@ Repo tokens are capability grants, not user identity sessions. The token subject
 
 Normal Git clients should use Basic auth with username x-access-token and a repo token as the password. Do not persist repo tokens in remote URLs. Bearer auth is also accepted by Git routes for service callers.
 
+## Reliable token creation
+
+For POST /v1/repos/{repoID}/tokens, include Idempotency-Key when retrying or when the request is part of a durable workflow.
+
+Use a key derived from the logical operation, not from a single HTTP attempt:
+
+`+"```http"+`
+Idempotency-Key: differ:import:imp_123:source-read-token
+Idempotency-Key: differ:divergence:div_456:push-token
+Idempotency-Key: differ:adaptation-run:run_789:stem-write-token
+`+"```"+`
+
+Reuse the same key only for the same repo, scope, subject, and TTL. If the same key is reused for a different token request, giterdone returns 409 Conflict; do not blindly retry that conflict.
+
 ## Agent-safe surfaces
 
 Public discovery:
@@ -133,6 +147,8 @@ repoID is the external control ID, for example repo_00000000-0000-4000-8000-0000
 > giterdone is an authenticated Git smart HTTP service with a small control API for creating backing Git repos and repo-scoped access tokens.
 
 giterdone is intended to be used by Differ services and trusted agents as a Git backend. Use canonical repo IDs, not namespace/name, as the Git identity. Public discovery files are safe to scrape. Control and Git operations require the appropriate tokens.
+
+For retriable automation, include Idempotency-Key on token creation and derive it from the stable logical operation.
 
 ## Agent Docs
 
