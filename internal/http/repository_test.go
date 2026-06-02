@@ -165,6 +165,12 @@ func TestMemoryRepoStoreCreateRepoToken(t *testing.T) {
 	if token.ExpiresAt != now.Add(time.Hour) {
 		t.Fatalf("expiresAt = %s, want %s", token.ExpiresAt, now.Add(time.Hour))
 	}
+	if !token.RevokedAt.IsZero() {
+		t.Fatalf("revokedAt = %s, want zero", token.RevokedAt)
+	}
+	if !token.LastUsedAt.IsZero() {
+		t.Fatalf("lastUsedAt = %s, want zero", token.LastUsedAt)
+	}
 
 	stored := store.tokens[token.ID]
 	if stored.Token != "" {
@@ -175,6 +181,133 @@ func TestMemoryRepoStoreCreateRepoToken(t *testing.T) {
 	}
 	if store.tokenIDsByHash[token.TokenHash] != token.ID {
 		t.Fatalf("token hash lookup did not point at %q", token.ID)
+	}
+}
+
+func TestMemoryRepoStoreListRevokeAndAuditRepoTokens(t *testing.T) {
+	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
+	store := newMemoryRepoStore(func() time.Time {
+		return now
+	})
+	store.gitStorage = fixedRepoGitStorage{path: "/tmp/repo.git"}
+	repo, err := store.CreateRepo(context.Background(), createRepoInput{
+		Namespace:     "fixture",
+		Name:          "project-token-lifecycle",
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
+		RepoID:     repo.ID,
+		Scope:      "read",
+		Subject:    "differ-reader-job",
+		TTLSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tokens, err := store.ListRepoTokens(context.Background(), listRepoTokensInput{RepoID: repo.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("tokens length = %d, want 1", len(tokens))
+	}
+	if tokens[0].ID != token.ID {
+		t.Fatalf("token id = %q, want %q", tokens[0].ID, token.ID)
+	}
+	if tokens[0].Token != "" {
+		t.Fatalf("listed token kept plaintext: %q", tokens[0].Token)
+	}
+
+	now = now.Add(time.Minute)
+	grant, err := store.AuthorizeGitAccess(context.Background(), authorizeGitAccessInput{
+		RepoID:    repo.ID,
+		Token:     token.Token,
+		Operation: gitOperationRead,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.Subject != "differ-reader-job" {
+		t.Fatalf("grant subject = %q, want differ-reader-job", grant.Subject)
+	}
+	tokens, err = store.ListRepoTokens(context.Background(), listRepoTokensInput{RepoID: repo.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens[0].LastUsedAt != now {
+		t.Fatalf("lastUsedAt = %s, want %s", tokens[0].LastUsedAt, now)
+	}
+
+	now = now.Add(time.Minute)
+	revoked, err := store.RevokeRepoToken(context.Background(), revokeRepoTokenInput{
+		RepoID:  repo.ID,
+		TokenID: token.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked.RevokedAt != now {
+		t.Fatalf("revokedAt = %s, want %s", revoked.RevokedAt, now)
+	}
+	revokedAgain, err := store.RevokeRepoToken(context.Background(), revokeRepoTokenInput{
+		RepoID:  repo.ID,
+		TokenID: token.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revokedAgain.RevokedAt != now {
+		t.Fatalf("second revoke changed revokedAt to %s, want %s", revokedAgain.RevokedAt, now)
+	}
+
+	_, err = store.AuthorizeGitAccess(context.Background(), authorizeGitAccessInput{
+		RepoID:    repo.ID,
+		Token:     token.Token,
+		Operation: gitOperationRead,
+	})
+	if !errors.Is(err, errRepoTokenInvalid) {
+		t.Fatalf("AuthorizeGitAccess error = %v, want errRepoTokenInvalid", err)
+	}
+}
+
+func TestMemoryRepoStoreTokenLifecycleRequiresMatchingRepo(t *testing.T) {
+	store := newMemoryRepoStore(time.Now)
+	firstRepo, err := store.CreateRepo(context.Background(), createRepoInput{
+		Namespace:     "fixture",
+		Name:          "project-token-one",
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRepo, err := store.CreateRepo(context.Background(), createRepoInput{
+		Namespace:     "fixture",
+		Name:          "project-token-two",
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
+		RepoID:     firstRepo.ID,
+		Scope:      "read",
+		Subject:    "differ-reader-job",
+		TTLSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.RevokeRepoToken(context.Background(), revokeRepoTokenInput{
+		RepoID:  secondRepo.ID,
+		TokenID: token.ID,
+	})
+	if !errors.Is(err, errRepoTokenNotFound) {
+		t.Fatalf("RevokeRepoToken error = %v, want errRepoTokenNotFound", err)
 	}
 }
 
@@ -190,6 +323,18 @@ func TestMemoryRepoStoreCreateRepoTokenRequiresExistingRepo(t *testing.T) {
 	if !errors.Is(err, errRepoNotFound) {
 		t.Fatalf("CreateRepoToken error = %v, want errRepoNotFound", err)
 	}
+}
+
+type fixedRepoGitStorage struct {
+	path string
+}
+
+func (storage fixedRepoGitStorage) InitBareRepo(ctx context.Context, repoID string, defaultBranch string) error {
+	return nil
+}
+
+func (storage fixedRepoGitStorage) BareRepoPath(ctx context.Context, repoID string) (string, error) {
+	return storage.path, nil
 }
 
 func assertCanonicalUUIDV4(t *testing.T, value string) {

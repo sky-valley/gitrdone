@@ -19,11 +19,26 @@ type createRepoTokenRequest struct {
 }
 
 type createRepoTokenResponse struct {
+	ID        string `json:"id"`
 	Token     string `json:"token"`
 	ExpiresAt string `json:"expiresAt"`
 	GitURL    string `json:"gitUrl"`
 	Scope     string `json:"scope"`
 	Subject   string `json:"subject"`
+}
+
+type repoTokenMetadataResponse struct {
+	ID         string  `json:"id"`
+	Scope      string  `json:"scope"`
+	Subject    string  `json:"subject"`
+	CreatedAt  string  `json:"createdAt"`
+	ExpiresAt  string  `json:"expiresAt"`
+	RevokedAt  *string `json:"revokedAt"`
+	LastUsedAt *string `json:"lastUsedAt"`
+}
+
+type listRepoTokensResponse struct {
+	Tokens []repoTokenMetadataResponse `json:"tokens"`
 }
 
 func createRepoTokenHandler(tokens repoTokenCreator, idempotency idempotencyDoer, baseURL string) http.Handler {
@@ -78,6 +93,7 @@ func createRepoTokenHandler(tokens repoTokenCreator, idempotency idempotencyDoer
 				return createRepoTokenResponse{}, err
 			}
 			return createRepoTokenResponse{
+				ID:        formatRepoTokenControlID(token.ID),
 				Token:     token.Token,
 				ExpiresAt: token.ExpiresAt.Format(time.RFC3339),
 				GitURL:    repoGitURL(baseURL, token.RepoID),
@@ -110,6 +126,67 @@ func createRepoTokenHandler(tokens repoTokenCreator, idempotency idempotencyDoer
 	})
 }
 
+func listRepoTokensHandler(tokens repoTokenLister) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		repoID, ok := repoIDFromPath(w, r)
+		if !ok {
+			return
+		}
+		records, err := tokens.ListRepoTokens(r.Context(), listRepoTokensInput{
+			RepoID: repoID,
+		})
+		if errors.Is(err, errRepoNotFound) {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "repo tokens could not be listed")
+			return
+		}
+
+		response := listRepoTokensResponse{
+			Tokens: make([]repoTokenMetadataResponse, 0, len(records)),
+		}
+		for _, record := range records {
+			response.Tokens = append(response.Tokens, repoTokenMetadataFromRecord(record))
+		}
+		writeJSON(w, http.StatusOK, response)
+	})
+}
+
+func revokeRepoTokenHandler(tokens repoTokenRevoker) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		repoID, ok := repoIDFromPath(w, r)
+		if !ok {
+			return
+		}
+		tokenID, ok := parseRepoTokenControlID(r.PathValue("tokenID"))
+		if !ok {
+			writeError(w, http.StatusBadRequest, "repo token id is invalid")
+			return
+		}
+
+		record, err := tokens.RevokeRepoToken(r.Context(), revokeRepoTokenInput{
+			RepoID:  repoID,
+			TokenID: tokenID,
+		})
+		if errors.Is(err, errRepoNotFound) {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+		if errors.Is(err, errRepoTokenNotFound) {
+			writeError(w, http.StatusNotFound, "repo token not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "repo token could not be revoked")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, repoTokenMetadataFromRecord(record))
+	})
+}
+
 func isRepoTokenScope(scope string) bool {
 	return scope == "read" || scope == "write" || scope == "readwrite"
 }
@@ -124,6 +201,20 @@ func writeCreateRepoTokenError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "repo token could not be created")
+}
+
+func repoIDFromPath(w http.ResponseWriter, r *http.Request) (string, bool) {
+	rawRepoID := strings.TrimSpace(r.PathValue("repoID"))
+	if rawRepoID == "" {
+		writeError(w, http.StatusBadRequest, "repo id is required")
+		return "", false
+	}
+	repoID, ok := parseRepoControlID(rawRepoID)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "repo id is invalid")
+		return "", false
+	}
+	return repoID, true
 }
 
 func createRepoTokenIdempotencyScope(repoID string) string {
@@ -148,4 +239,24 @@ func createRepoTokenRequestHash(repoID string, request createRepoTokenRequest) s
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+func repoTokenMetadataFromRecord(record repoTokenRecord) repoTokenMetadataResponse {
+	return repoTokenMetadataResponse{
+		ID:         formatRepoTokenControlID(record.ID),
+		Scope:      record.Scope,
+		Subject:    record.Subject,
+		CreatedAt:  record.CreatedAt.Format(time.RFC3339),
+		ExpiresAt:  record.ExpiresAt.Format(time.RFC3339),
+		RevokedAt:  optionalTime(record.RevokedAt),
+		LastUsedAt: optionalTime(record.LastUsedAt),
+	}
+}
+
+func optionalTime(value time.Time) *string {
+	if value.IsZero() {
+		return nil
+	}
+	formatted := value.Format(time.RFC3339)
+	return &formatted
 }

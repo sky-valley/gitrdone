@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 )
@@ -25,6 +26,14 @@ type repoArchiver interface {
 
 type repoTokenCreator interface {
 	CreateRepoToken(ctx context.Context, input createRepoTokenInput) (repoTokenRecord, error)
+}
+
+type repoTokenLister interface {
+	ListRepoTokens(ctx context.Context, input listRepoTokensInput) ([]repoTokenRecord, error)
+}
+
+type repoTokenRevoker interface {
+	RevokeRepoToken(ctx context.Context, input revokeRepoTokenInput) (repoTokenRecord, error)
 }
 
 type gitAccessAuthorizer interface {
@@ -50,6 +59,15 @@ type createRepoTokenInput struct {
 	Scope      string
 	Subject    string
 	TTLSeconds int
+}
+
+type listRepoTokensInput struct {
+	RepoID string
+}
+
+type revokeRepoTokenInput struct {
+	RepoID  string
+	TokenID string
 }
 
 type gitOperation string
@@ -90,6 +108,8 @@ type repoTokenRecord struct {
 	Subject       string
 	ExpiresAt     time.Time
 	CreatedAt     time.Time
+	RevokedAt     time.Time
+	LastUsedAt    time.Time
 }
 
 var errRepositoryNotImplemented = errors.New("repository not implemented")
@@ -97,6 +117,7 @@ var errRepoNotFound = errors.New("repo not found")
 var errRepoArchived = errors.New("repo archived")
 var errRepoTokenInvalid = errors.New("repo token invalid")
 var errRepoTokenForbidden = errors.New("repo token forbidden")
+var errRepoTokenNotFound = errors.New("repo token not found")
 var errRepoStorageNotFound = errors.New("repo storage not found")
 
 type failingRepoStore struct{}
@@ -114,6 +135,14 @@ func (failingRepoStore) ArchiveRepo(ctx context.Context, input archiveRepoInput)
 }
 
 func (failingRepoStore) CreateRepoToken(ctx context.Context, input createRepoTokenInput) (repoTokenRecord, error) {
+	return repoTokenRecord{}, errRepositoryNotImplemented
+}
+
+func (failingRepoStore) ListRepoTokens(ctx context.Context, input listRepoTokensInput) ([]repoTokenRecord, error) {
+	return nil, errRepositoryNotImplemented
+}
+
+func (failingRepoStore) RevokeRepoToken(ctx context.Context, input revokeRepoTokenInput) (repoTokenRecord, error) {
 	return repoTokenRecord{}, errRepositoryNotImplemented
 }
 
@@ -232,6 +261,43 @@ func (store *memoryRepoStore) CreateRepoToken(ctx context.Context, input createR
 	return record, nil
 }
 
+func (store *memoryRepoStore) ListRepoTokens(ctx context.Context, input listRepoTokensInput) ([]repoTokenRecord, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	if _, ok := store.repos[input.RepoID]; !ok {
+		return nil, errRepoNotFound
+	}
+	tokens := make([]repoTokenRecord, 0)
+	for _, token := range store.tokens {
+		if token.RepoID != input.RepoID {
+			continue
+		}
+		token.Token = ""
+		tokens = append(tokens, token)
+	}
+	sortRepoTokenRecords(tokens)
+	return tokens, nil
+}
+
+func (store *memoryRepoStore) RevokeRepoToken(ctx context.Context, input revokeRepoTokenInput) (repoTokenRecord, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	if _, ok := store.repos[input.RepoID]; !ok {
+		return repoTokenRecord{}, errRepoNotFound
+	}
+	token, ok := store.tokens[input.TokenID]
+	if !ok || token.RepoID != input.RepoID {
+		return repoTokenRecord{}, errRepoTokenNotFound
+	}
+	if token.RevokedAt.IsZero() {
+		token.RevokedAt = store.now()
+		store.tokens[token.ID] = token
+	}
+	return token, nil
+}
+
 func (store *memoryRepoStore) AuthorizeGitAccess(ctx context.Context, input authorizeGitAccessInput) (gitAccessGrant, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -254,7 +320,11 @@ func (store *memoryRepoStore) AuthorizeGitAccess(ctx context.Context, input auth
 	if token.RepoID != repo.ID {
 		return gitAccessGrant{}, errRepoTokenInvalid
 	}
-	if !store.now().Before(token.ExpiresAt) {
+	if !token.RevokedAt.IsZero() {
+		return gitAccessGrant{}, errRepoTokenInvalid
+	}
+	now := store.now()
+	if !now.Before(token.ExpiresAt) {
 		return gitAccessGrant{}, errRepoTokenInvalid
 	}
 	if !scopeAllowsGitOperation(token.Scope, input.Operation) {
@@ -264,11 +334,22 @@ func (store *memoryRepoStore) AuthorizeGitAccess(ctx context.Context, input auth
 	if err != nil {
 		return gitAccessGrant{}, err
 	}
+	token.LastUsedAt = now
+	store.tokens[token.ID] = token
 	return gitAccessGrant{
 		RepoID:   repo.ID,
 		RepoPath: repoPath,
 		Subject:  token.Subject,
 	}, nil
+}
+
+func sortRepoTokenRecords(tokens []repoTokenRecord) {
+	sort.Slice(tokens, func(i, j int) bool {
+		if tokens[i].CreatedAt.Equal(tokens[j].CreatedAt) {
+			return tokens[i].ID < tokens[j].ID
+		}
+		return tokens[i].CreatedAt.Before(tokens[j].CreatedAt)
+	})
 }
 
 func scopeAllowsGitOperation(scope string, operation gitOperation) bool {

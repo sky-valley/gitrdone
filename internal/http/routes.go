@@ -12,6 +12,8 @@ type Handlers struct {
 	GetRepo         http.Handler
 	ArchiveRepo     http.Handler
 	CreateRepoToken http.Handler
+	ListRepoTokens  http.Handler
+	RevokeRepoToken http.Handler
 	GitSmartHTTP    http.Handler
 }
 
@@ -39,6 +41,8 @@ func NewMux(h Handlers) *http.ServeMux {
 	mux.Handle("GET /v1/repos/{repoID}", h.GetRepo)
 	mux.Handle("POST /v1/repos/{repoID}/archive", h.ArchiveRepo)
 	mux.Handle("POST /v1/repos/{repoID}/tokens", h.CreateRepoToken)
+	mux.Handle("GET /v1/repos/{repoID}/tokens", h.ListRepoTokens)
+	mux.Handle("POST /v1/repos/{repoID}/tokens/{tokenID}/revoke", h.RevokeRepoToken)
 
 	gitSmartHTTP := gitRepoRoute(h.GitSmartHTTP)
 	mux.Handle("GET /git/repos/{repoGitID}/{gitPath...}", gitSmartHTTP)

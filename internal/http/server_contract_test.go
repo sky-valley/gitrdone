@@ -203,6 +203,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 
 		requireStatus(t, res, body, http.StatusCreated)
 		var got struct {
+			ID        string `json:"id"`
 			Token     string `json:"token"`
 			ExpiresAt string `json:"expiresAt"`
 			GitURL    string `json:"gitUrl"`
@@ -210,6 +211,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 			Subject   string `json:"subject"`
 		}
 		decodeJSON(t, res, body, &got)
+		assertExternalRepoTokenID(t, got.ID)
 		if !strings.HasPrefix(got.Token, "gtd_") {
 			t.Fatalf("token = %q, want gtd_ prefix", got.Token)
 		}
@@ -235,6 +237,192 @@ func TestTokenProvisioningContract(t *testing.T) {
 		}
 	})
 
+	t.Run("repo tokens list metadata without token secrets", func(t *testing.T) {
+		created := createRepoFixture(t, server, "token-list")
+		res, body := request(
+			t,
+			server,
+			http.MethodPost,
+			"/v1/repos/"+created.ID+"/tokens",
+			controlAuthorization,
+			"application/json",
+			`{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`,
+		)
+		requireStatus(t, res, body, http.StatusCreated)
+		var createdToken struct {
+			ID        string `json:"id"`
+			Token     string `json:"token"`
+			ExpiresAt string `json:"expiresAt"`
+			Scope     string `json:"scope"`
+			Subject   string `json:"subject"`
+		}
+		decodeJSON(t, res, body, &createdToken)
+		assertExternalRepoTokenID(t, createdToken.ID)
+
+		res, body = request(t, server, http.MethodGet, "/v1/repos/"+created.ID+"/tokens", controlAuthorization, "", "")
+
+		requireStatus(t, res, body, http.StatusOK)
+		var got struct {
+			Tokens []repoTokenMetadataFixture `json:"tokens"`
+		}
+		decodeJSON(t, res, body, &got)
+		if len(got.Tokens) != 1 {
+			t.Fatalf("tokens length = %d, want 1: %s", len(got.Tokens), string(body))
+		}
+		token := got.Tokens[0]
+		if token.ID != createdToken.ID {
+			t.Fatalf("id = %q, want %q", token.ID, createdToken.ID)
+		}
+		if token.Scope != "read" {
+			t.Fatalf("scope = %q, want read", token.Scope)
+		}
+		if token.Subject != "differ-reader-job" {
+			t.Fatalf("subject = %q, want differ-reader-job", token.Subject)
+		}
+		assertRFC3339(t, token.CreatedAt)
+		if token.ExpiresAt != createdToken.ExpiresAt {
+			t.Fatalf("expiresAt = %q, want %q", token.ExpiresAt, createdToken.ExpiresAt)
+		}
+		if token.RevokedAt != nil {
+			t.Fatalf("revokedAt = %q, want null", *token.RevokedAt)
+		}
+		if token.LastUsedAt != nil {
+			t.Fatalf("lastUsedAt = %q, want null", *token.LastUsedAt)
+		}
+
+		var raw struct {
+			Tokens []map[string]any `json:"tokens"`
+		}
+		decodeJSON(t, res, body, &raw)
+		for _, rawToken := range raw.Tokens {
+			if _, ok := rawToken["token"]; ok {
+				t.Fatalf("list response exposed token value: %#v", rawToken)
+			}
+			if _, ok := rawToken["tokenHash"]; ok {
+				t.Fatalf("list response exposed token hash: %#v", rawToken)
+			}
+		}
+		if strings.Contains(string(body), createdToken.Token) {
+			t.Fatalf("list response contains raw token %q: %s", createdToken.Token, string(body))
+		}
+	})
+
+	t.Run("repo token revoke is idempotent and blocks git access", func(t *testing.T) {
+		created := createRepoFixture(t, server, "token-revoke")
+		res, body := request(
+			t,
+			server,
+			http.MethodPost,
+			"/v1/repos/"+created.ID+"/tokens",
+			controlAuthorization,
+			"application/json",
+			`{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`,
+		)
+		requireStatus(t, res, body, http.StatusCreated)
+		var createdToken struct {
+			ID    string `json:"id"`
+			Token string `json:"token"`
+		}
+		decodeJSON(t, res, body, &createdToken)
+		assertExternalRepoTokenID(t, createdToken.ID)
+
+		res, body = request(t, server, http.MethodPost, "/v1/repos/"+created.ID+"/tokens/"+createdToken.ID+"/revoke", controlAuthorization, "", "")
+
+		requireStatus(t, res, body, http.StatusOK)
+		var revoked repoTokenMetadataFixture
+		decodeJSON(t, res, body, &revoked)
+		if revoked.ID != createdToken.ID {
+			t.Fatalf("revoked id = %q, want %q", revoked.ID, createdToken.ID)
+		}
+		if revoked.RevokedAt == nil {
+			t.Fatal("revokedAt is null, want timestamp")
+		}
+		assertRFC3339(t, *revoked.RevokedAt)
+		firstRevokedAt := *revoked.RevokedAt
+
+		res, body = request(t, server, http.MethodGet, "/git/repos/"+created.ID+".git/info/refs?service=git-upload-pack", bearer(createdToken.Token), "", "")
+		requireStatus(t, res, body, http.StatusUnauthorized)
+		if strings.Contains(string(body), "revoked") {
+			t.Fatalf("git auth body leaked token revocation state: %q", string(body))
+		}
+
+		res, body = request(t, server, http.MethodPost, "/v1/repos/"+created.ID+"/tokens/"+createdToken.ID+"/revoke", controlAuthorization, "", "")
+
+		requireStatus(t, res, body, http.StatusOK)
+		var revokedAgain repoTokenMetadataFixture
+		decodeJSON(t, res, body, &revokedAgain)
+		if revokedAgain.RevokedAt == nil || *revokedAgain.RevokedAt != firstRevokedAt {
+			t.Fatalf("second revokedAt = %v, want unchanged %q", revokedAgain.RevokedAt, firstRevokedAt)
+		}
+	})
+
+	t.Run("token use updates last used metadata", func(t *testing.T) {
+		created := createRepoFixture(t, server, "token-last-used")
+		res, body := request(
+			t,
+			server,
+			http.MethodPost,
+			"/v1/repos/"+created.ID+"/tokens",
+			controlAuthorization,
+			"application/json",
+			`{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`,
+		)
+		requireStatus(t, res, body, http.StatusCreated)
+		var createdToken struct {
+			ID    string `json:"id"`
+			Token string `json:"token"`
+		}
+		decodeJSON(t, res, body, &createdToken)
+
+		res, body = request(t, server, http.MethodGet, "/git/repos/"+created.ID+".git/info/refs?service=git-upload-pack", bearer(createdToken.Token), "", "")
+		requireStatus(t, res, body, http.StatusOK)
+
+		res, body = request(t, server, http.MethodGet, "/v1/repos/"+created.ID+"/tokens", controlAuthorization, "", "")
+
+		requireStatus(t, res, body, http.StatusOK)
+		var got struct {
+			Tokens []repoTokenMetadataFixture `json:"tokens"`
+		}
+		decodeJSON(t, res, body, &got)
+		if len(got.Tokens) != 1 {
+			t.Fatalf("tokens length = %d, want 1: %s", len(got.Tokens), string(body))
+		}
+		if got.Tokens[0].LastUsedAt == nil {
+			t.Fatal("lastUsedAt is null, want timestamp")
+		}
+		assertRFC3339(t, *got.Tokens[0].LastUsedAt)
+	})
+
+	t.Run("repo token from another repo cannot be revoked through this repo", func(t *testing.T) {
+		firstRepo := createRepoFixture(t, server, "token-revoke-one")
+		secondRepo := createRepoFixture(t, server, "token-revoke-two")
+		res, body := request(
+			t,
+			server,
+			http.MethodPost,
+			"/v1/repos/"+firstRepo.ID+"/tokens",
+			controlAuthorization,
+			"application/json",
+			`{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`,
+		)
+		requireStatus(t, res, body, http.StatusCreated)
+		var createdToken struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, res, body, &createdToken)
+
+		res, body = request(t, server, http.MethodPost, "/v1/repos/"+secondRepo.ID+"/tokens/"+createdToken.ID+"/revoke", controlAuthorization, "", "")
+
+		requireStatus(t, res, body, http.StatusNotFound)
+		var got struct {
+			Error string `json:"error"`
+		}
+		decodeJSON(t, res, body, &got)
+		if got.Error != "repo token not found" {
+			t.Fatalf("error = %q, want repo token not found", got.Error)
+		}
+	})
+
 	t.Run("repo token creation is idempotent by caller key", func(t *testing.T) {
 		created := createRepoFixture(t, server, "idempotent-token")
 		requestBody := `{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-import:imp_123:source-read"}`
@@ -254,9 +442,11 @@ func TestTokenProvisioningContract(t *testing.T) {
 		}
 
 		var got struct {
+			ID    string `json:"id"`
 			Token string `json:"token"`
 		}
 		decodeJSON(t, secondRes, secondBody, &got)
+		assertExternalRepoTokenID(t, got.ID)
 		if got.Token == "" {
 			t.Fatal("replayed token is empty")
 		}
@@ -334,12 +524,14 @@ func TestTokenProvisioningContract(t *testing.T) {
 
 		requireStatus(t, res, body, http.StatusCreated)
 		var got struct {
+			ID        string `json:"id"`
 			Token     string `json:"token"`
 			ExpiresAt string `json:"expiresAt"`
 			Scope     string `json:"scope"`
 			Subject   string `json:"subject"`
 		}
 		decodeJSON(t, res, body, &got)
+		assertExternalRepoTokenID(t, got.ID)
 		if !strings.HasPrefix(got.Token, "gtd_") {
 			t.Fatalf("token = %q, want gtd_ prefix", got.Token)
 		}
@@ -456,6 +648,16 @@ func TestControlAuthContract(t *testing.T) {
 			body:        `{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc"}`,
 		},
 		{
+			name:   "list tokens rejects missing auth",
+			method: http.MethodGet,
+			target: "/v1/repos/repo_123/tokens",
+		},
+		{
+			name:   "revoke token rejects missing auth",
+			method: http.MethodPost,
+			target: "/v1/repos/repo_123/tokens/token_123/revoke",
+		},
+		{
 			name:        "control route rejects wrong bearer token",
 			method:      http.MethodPost,
 			target:      "/v1/repos",
@@ -523,6 +725,16 @@ type createdRepoFixture struct {
 	ID     string `json:"id"`
 	Repo   string `json:"repo"`
 	GitURL string `json:"gitUrl"`
+}
+
+type repoTokenMetadataFixture struct {
+	ID         string  `json:"id"`
+	Scope      string  `json:"scope"`
+	Subject    string  `json:"subject"`
+	CreatedAt  string  `json:"createdAt"`
+	ExpiresAt  string  `json:"expiresAt"`
+	RevokedAt  *string `json:"revokedAt"`
+	LastUsedAt *string `json:"lastUsedAt"`
 }
 
 func createRepoFixture(t *testing.T, server http.Handler, suffix string) createdRepoFixture {
@@ -631,12 +843,38 @@ func assertFutureExpiryWithin(t *testing.T, value string, duration time.Duration
 	}
 }
 
+func assertRFC3339(t *testing.T, value string) {
+	t.Helper()
+	if _, err := time.Parse(time.RFC3339, value); err != nil {
+		t.Fatalf("value is not RFC3339: %q", value)
+	}
+}
+
 func assertExternalRepoID(t *testing.T, value string) {
 	t.Helper()
 	if !strings.HasPrefix(value, "repo_") {
 		t.Fatalf("id = %q, want repo_ prefix", value)
 	}
 	uuid := strings.TrimPrefix(value, "repo_")
+	if len(uuid) != 36 {
+		t.Fatalf("uuid = %q, length %d, want 36", uuid, len(uuid))
+	}
+	if uuid[14] != '4' {
+		t.Fatalf("uuid = %q, want version 4", uuid)
+	}
+	switch uuid[19] {
+	case '8', '9', 'a', 'b':
+	default:
+		t.Fatalf("uuid = %q, want RFC 4122 variant", uuid)
+	}
+}
+
+func assertExternalRepoTokenID(t *testing.T, value string) {
+	t.Helper()
+	if !strings.HasPrefix(value, "token_") {
+		t.Fatalf("id = %q, want token_ prefix", value)
+	}
+	uuid := strings.TrimPrefix(value, "token_")
 	if len(uuid) != 36 {
 		t.Fatalf("uuid = %q, length %d, want 36", uuid, len(uuid))
 	}

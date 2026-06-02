@@ -3,6 +3,7 @@ package httpapi
 import "strings"
 
 const repoControlIDPrefix = "repo_"
+const repoTokenControlIDPrefix = "token_"
 
 func formatRepoControlID(id string) string {
 	return repoControlIDPrefix + id
@@ -10,6 +11,18 @@ func formatRepoControlID(id string) string {
 
 func parseRepoControlID(value string) (string, bool) {
 	raw, ok := strings.CutPrefix(strings.TrimSpace(value), repoControlIDPrefix)
+	if !ok || !isCanonicalUUID(raw) {
+		return "", false
+	}
+	return raw, true
+}
+
+func formatRepoTokenControlID(id string) string {
+	return repoTokenControlIDPrefix + id
+}
+
+func parseRepoTokenControlID(value string) (string, bool) {
+	raw, ok := strings.CutPrefix(strings.TrimSpace(value), repoTokenControlIDPrefix)
 	if !ok || !isCanonicalUUID(raw) {
 		return "", false
 	}
