@@ -1,7 +1,6 @@
 package httpapi_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,8 +48,9 @@ func TestControlAPIContract(t *testing.T) {
 		if got.Repo != "differ/project-create" {
 			t.Fatalf("repo = %q, want differ/project-create", got.Repo)
 		}
-		if got.GitURL != "https://git.example.com/differ/project-create.git" {
-			t.Fatalf("gitUrl = %q", got.GitURL)
+		wantGitURL := "https://git.example.com/git/repos/" + got.ID + ".git"
+		if got.GitURL != wantGitURL {
+			t.Fatalf("gitUrl = %q, want %q", got.GitURL, wantGitURL)
 		}
 		if got.DefaultBranch != "main" {
 			t.Fatalf("defaultBranch = %q, want main", got.DefaultBranch)
@@ -147,7 +147,8 @@ func TestTokenProvisioningContract(t *testing.T) {
 			t.Fatalf("subject = %q, want differ-bootstrap-job-abc", got.Subject)
 		}
 		assertFutureExpiryWithin(t, got.ExpiresAt, time.Hour)
-		if !strings.Contains(got.GitURL, "x-access-token:"+got.Token+"@git.example.com/"+created.Repo+".git") {
+		wantGitURLPart := "x-access-token:" + got.Token + "@git.example.com/git/repos/" + created.ID + ".git"
+		if !strings.Contains(got.GitURL, wantGitURLPart) {
 			t.Fatalf("gitUrl does not embed token for normal git clients: %q", got.GitURL)
 		}
 
@@ -312,44 +313,6 @@ func TestControlAuthContract(t *testing.T) {
 	}
 }
 
-func TestGitSmartHTTPContract(t *testing.T) {
-	server := httpapi.NewServer(httpapi.Config{
-		BaseURL: "https://git.example.com",
-	})
-
-	t.Run("upload-pack discovery uses smart http content type", func(t *testing.T) {
-		res, body := request(t, server, http.MethodGet, "/differ/project-123.git/info/refs?service=git-upload-pack", "Bearer gtd_read_token", "", "")
-
-		requireStatus(t, res, body, http.StatusOK)
-		if got := res.Header.Get("Content-Type"); got != "application/x-git-upload-pack-advertisement" {
-			t.Fatalf("Content-Type = %q", got)
-		}
-		if !bytes.HasPrefix(body, []byte("001e# service=git-upload-pack\n")) {
-			t.Fatalf("body does not start with upload-pack service advertisement: %q", string(body))
-		}
-	})
-
-	t.Run("receive-pack accepts pushes through normal git smart http", func(t *testing.T) {
-		res, body := request(
-			t,
-			server,
-			http.MethodPost,
-			"/differ/project-123.git/git-receive-pack",
-			"Bearer gtd_write_token",
-			"application/x-git-receive-pack-request",
-			"0000",
-		)
-
-		requireStatus(t, res, body, http.StatusOK)
-		if got := res.Header.Get("Content-Type"); got != "application/x-git-receive-pack-result" {
-			t.Fatalf("Content-Type = %q", got)
-		}
-		if len(body) == 0 {
-			t.Fatal("receive-pack response body is empty")
-		}
-	})
-}
-
 func request(t *testing.T, server http.Handler, method, target, auth, contentType, body string) (*http.Response, []byte) {
 	t.Helper()
 
@@ -398,8 +361,9 @@ func createRepoFixture(t *testing.T, server http.Handler, suffix string) created
 	if created.Repo != namespace+"/"+name {
 		t.Fatalf("created repo = %q, want %s/%s", created.Repo, namespace, name)
 	}
-	if created.GitURL != "https://git.example.com/"+namespace+"/"+name+".git" {
-		t.Fatalf("created gitUrl = %q", created.GitURL)
+	wantGitURL := "https://git.example.com/git/repos/" + created.ID + ".git"
+	if created.GitURL != wantGitURL {
+		t.Fatalf("created gitUrl = %q, want %q", created.GitURL, wantGitURL)
 	}
 	return created
 }

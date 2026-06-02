@@ -3,7 +3,6 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -76,7 +75,7 @@ func createRepoTokenHandler(tokens repoTokenCreator, baseURL string) http.Handle
 		writeJSON(w, http.StatusCreated, createRepoTokenResponse{
 			Token:     token.Token,
 			ExpiresAt: token.ExpiresAt.Format(time.RFC3339),
-			GitURL:    repoGitURLWithToken(baseURL, token.RepoNamespace, token.RepoName, token.Token),
+			GitURL:    repoGitURLWithToken(baseURL, token.RepoID, token.Token),
 			Scope:     token.Scope,
 			Subject:   token.Subject,
 		})
@@ -85,14 +84,4 @@ func createRepoTokenHandler(tokens repoTokenCreator, baseURL string) http.Handle
 
 func isRepoTokenScope(scope string) bool {
 	return scope == "read" || scope == "write" || scope == "readwrite"
-}
-
-func repoGitURLWithToken(baseURL string, namespace string, name string, token string) string {
-	raw := strings.TrimRight(baseURL, "/") + "/" + namespace + "/" + name + ".git"
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return raw
-	}
-	parsed.User = url.UserPassword("x-access-token", token)
-	return parsed.String()
 }

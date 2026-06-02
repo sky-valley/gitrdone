@@ -70,7 +70,7 @@ func createRepoHandler(repos repoCreator, baseURL string) http.Handler {
 		writeJSON(w, http.StatusCreated, createRepoResponse{
 			ID:            formatRepoControlID(repo.ID),
 			Repo:          repo.Namespace + "/" + repo.Name,
-			GitURL:        strings.TrimRight(baseURL, "/") + "/" + repo.Namespace + "/" + repo.Name + ".git",
+			GitURL:        repoGitURL(baseURL, repo.ID),
 			DefaultBranch: repo.DefaultBranch,
 		})
 	})
@@ -100,7 +100,7 @@ func getRepoHandler(repos repoGetter, baseURL string) http.Handler {
 		writeJSON(w, http.StatusOK, getRepoResponse{
 			ID:       formatRepoControlID(repo.ID),
 			Repo:     repo.Namespace + "/" + repo.Name,
-			GitURL:   strings.TrimRight(baseURL, "/") + "/" + repo.Namespace + "/" + repo.Name + ".git",
+			GitURL:   repoGitURL(baseURL, repo.ID),
 			Archived: false,
 		})
 	})

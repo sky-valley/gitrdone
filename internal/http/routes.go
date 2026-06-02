@@ -1,6 +1,9 @@
 package httpapi
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 type Handlers struct {
 	Healthz         http.Handler
@@ -21,8 +24,21 @@ func NewMux(h Handlers) *http.ServeMux {
 	mux.Handle("POST /v1/repos/{repoID}/archive", h.ArchiveRepo)
 	mux.Handle("POST /v1/repos/{repoID}/tokens", h.CreateRepoToken)
 
-	mux.Handle("GET /{namespace}/{gitPath...}", h.GitSmartHTTP)
-	mux.Handle("POST /{namespace}/{gitPath...}", h.GitSmartHTTP)
+	gitSmartHTTP := gitRepoRoute(h.GitSmartHTTP)
+	mux.Handle("GET /git/repos/{repoGitID}/{gitPath...}", gitSmartHTTP)
+	mux.Handle("POST /git/repos/{repoGitID}/{gitPath...}", gitSmartHTTP)
 
 	return mux
+}
+
+func gitRepoRoute(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		repoID, ok := strings.CutSuffix(r.PathValue("repoGitID"), ".git")
+		if !ok || repoID == "" {
+			http.NotFound(w, r)
+			return
+		}
+		r.SetPathValue("repoID", repoID)
+		next.ServeHTTP(w, r)
+	})
 }
