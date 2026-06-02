@@ -5,24 +5,31 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	httpapi "skyvalley.ac/m/v2/internal/http"
 )
 
 const (
-	defaultAddr    = ":8080"
-	defaultBaseURL = "http://localhost:8080"
+	defaultAddr        = ":8080"
+	defaultBaseURL     = "http://localhost:8080"
+	defaultStorageRoot = ".storage"
 )
 
 type config struct {
 	addr          string
 	baseURL       string
 	controlBearer string
+	storageRoot   string
 }
 
 func main() {
 	cfg, err := configFromEnv(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	storageRoot, err := filepath.Abs(cfg.storageRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -32,10 +39,11 @@ func main() {
 		Handler: httpapi.NewServer(httpapi.Config{
 			BaseURL:       cfg.baseURL,
 			ControlBearer: cfg.controlBearer,
+			StorageRoot:   cfg.storageRoot,
 		}),
 	}
 
-	log.Printf("giterdone listening on %s", cfg.addr)
+	log.Printf("giterdone listening on %s, storage=%s", cfg.addr, storageRoot)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -46,12 +54,16 @@ func configFromEnv(getenv func(string) string) (config, error) {
 		addr:          strings.TrimSpace(getenv("GITERDONE_ADDR")),
 		baseURL:       strings.TrimSpace(getenv("GITERDONE_BASE_URL")),
 		controlBearer: strings.TrimSpace(getenv("GITERDONE_CONTROL_BEARER")),
+		storageRoot:   strings.TrimSpace(getenv("GITERDONE_STORAGE_ROOT")),
 	}
 	if cfg.addr == "" {
 		cfg.addr = defaultAddr
 	}
 	if cfg.baseURL == "" {
 		cfg.baseURL = defaultBaseURL
+	}
+	if cfg.storageRoot == "" {
+		cfg.storageRoot = defaultStorageRoot
 	}
 	if cfg.controlBearer == "" {
 		return config{}, errors.New("GITERDONE_CONTROL_BEARER is required")

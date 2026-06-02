@@ -19,6 +19,9 @@ func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
 	if cfg.baseURL != "http://localhost:8080" {
 		t.Fatalf("baseURL = %q, want http://localhost:8080", cfg.baseURL)
 	}
+	if cfg.storageRoot != ".storage" {
+		t.Fatalf("storageRoot = %q, want .storage", cfg.storageRoot)
+	}
 	if cfg.controlBearer != "internal-admin-token" {
 		t.Fatalf("controlBearer = %q, want internal-admin-token", cfg.controlBearer)
 	}
@@ -29,6 +32,7 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 		"GITERDONE_ADDR":           "127.0.0.1:9090",
 		"GITERDONE_BASE_URL":       "https://git.example.com",
 		"GITERDONE_CONTROL_BEARER": "internal-admin-token",
+		"GITERDONE_STORAGE_ROOT":   "/var/lib/giterdone",
 	}
 
 	cfg, err := configFromEnv(func(key string) string {
@@ -43,6 +47,9 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	}
 	if cfg.baseURL != "https://git.example.com" {
 		t.Fatalf("baseURL = %q, want https://git.example.com", cfg.baseURL)
+	}
+	if cfg.storageRoot != "/var/lib/giterdone" {
+		t.Fatalf("storageRoot = %q, want /var/lib/giterdone", cfg.storageRoot)
 	}
 	if cfg.controlBearer != "internal-admin-token" {
 		t.Fatalf("controlBearer = %q, want internal-admin-token", cfg.controlBearer)

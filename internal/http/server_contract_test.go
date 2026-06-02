@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,9 +18,11 @@ import (
 const controlAuthorization = "Bearer internal-admin-token"
 
 func TestControlAPIContract(t *testing.T) {
+	storageRoot := t.TempDir()
 	server := httpapi.NewServer(httpapi.Config{
 		BaseURL:       "https://git.example.com",
 		ControlBearer: "internal-admin-token",
+		StorageRoot:   storageRoot,
 	})
 
 	t.Run("healthz reports service readiness", func(t *testing.T) {
@@ -55,6 +59,7 @@ func TestControlAPIContract(t *testing.T) {
 		if got.DefaultBranch != "main" {
 			t.Fatalf("defaultBranch = %q, want main", got.DefaultBranch)
 		}
+		assertBareRepoStorage(t, storageRoot, got.ID, "main")
 	})
 
 	t.Run("repo lookup returns the public repo identity", func(t *testing.T) {
@@ -114,6 +119,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 	server := httpapi.NewServer(httpapi.Config{
 		BaseURL:       "https://git.example.com",
 		ControlBearer: "internal-admin-token",
+		StorageRoot:   t.TempDir(),
 	})
 
 	t.Run("repo token can read and write", func(t *testing.T) {
@@ -249,6 +255,7 @@ func TestControlAuthContract(t *testing.T) {
 	server := httpapi.NewServer(httpapi.Config{
 		BaseURL:       "https://git.example.com",
 		ControlBearer: "internal-admin-token",
+		StorageRoot:   t.TempDir(),
 	})
 
 	tests := []struct {
@@ -366,6 +373,46 @@ func createRepoFixture(t *testing.T, server http.Handler, suffix string) created
 		t.Fatalf("created gitUrl = %q, want %q", created.GitURL, wantGitURL)
 	}
 	return created
+}
+
+func assertBareRepoStorage(t *testing.T, storageRoot string, externalRepoID string, defaultBranch string) {
+	t.Helper()
+
+	repoUUID := strings.TrimPrefix(externalRepoID, "repo_")
+	repoPath := filepath.Join(storageRoot, "repos", repoUUID+".git")
+	info, err := os.Stat(repoPath)
+	if err != nil {
+		t.Fatalf("bare repo path %q is not accessible: %v", repoPath, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("bare repo path %q is not a directory", repoPath)
+	}
+
+	head, err := os.ReadFile(filepath.Join(repoPath, "HEAD"))
+	if err != nil {
+		t.Fatalf("read bare repo HEAD: %v", err)
+	}
+	wantHead := "ref: refs/heads/" + defaultBranch + "\n"
+	if string(head) != wantHead {
+		t.Fatalf("HEAD = %q, want %q", string(head), wantHead)
+	}
+
+	config, err := os.ReadFile(filepath.Join(repoPath, "config"))
+	if err != nil {
+		t.Fatalf("read bare repo config: %v", err)
+	}
+	if !strings.Contains(string(config), "bare = true") {
+		t.Fatalf("bare repo config does not mark repository bare: %q", string(config))
+	}
+	for _, name := range []string{"objects", "refs"} {
+		info, err := os.Stat(filepath.Join(repoPath, name))
+		if err != nil {
+			t.Fatalf("bare repo missing %s directory: %v", name, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("bare repo %s path is not a directory", name)
+		}
+	}
 }
 
 func createRepo(t *testing.T, server http.Handler, namespace, name, defaultBranch string) (*http.Response, []byte) {

@@ -96,6 +96,7 @@ type memoryRepoStore struct {
 	byName         map[string]string
 	tokens         map[string]repoTokenRecord
 	tokenIDsByHash map[string]string
+	gitStorage     repoGitStorage
 	now            func() time.Time
 }
 
@@ -108,6 +109,7 @@ func newMemoryRepoStore(now func() time.Time) *memoryRepoStore {
 		byName:         map[string]string{},
 		tokens:         map[string]repoTokenRecord{},
 		tokenIDsByHash: map[string]string{},
+		gitStorage:     noopRepoGitStorage{},
 		now:            now,
 	}
 }
@@ -123,6 +125,9 @@ func (store *memoryRepoStore) CreateRepo(ctx context.Context, input createRepoIn
 
 	repoID, err := newUUID()
 	if err != nil {
+		return repoRecord{}, err
+	}
+	if err := store.gitStorage.InitBareRepo(ctx, repoID, input.DefaultBranch); err != nil {
 		return repoRecord{}, err
 	}
 	repo := repoRecord{

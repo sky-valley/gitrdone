@@ -5,6 +5,7 @@ import "net/http"
 type Config struct {
 	BaseURL       string
 	ControlBearer string
+	StorageRoot   string
 }
 
 func NewServer(config Config) http.Handler {
@@ -12,6 +13,7 @@ func NewServer(config Config) http.Handler {
 		return controlAuth(config.ControlBearer, handler)
 	}
 	repos := newMemoryRepoStore(nil)
+	repos.gitStorage = newFilesystemGitStorage(config.StorageRoot)
 
 	return NewMux(Handlers{
 		Healthz:         noContent(),
