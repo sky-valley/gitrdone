@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -23,7 +26,10 @@ type createRepoTokenResponse struct {
 	Subject   string `json:"subject"`
 }
 
-func createRepoTokenHandler(tokens repoTokenCreator, baseURL string) http.Handler {
+func createRepoTokenHandler(tokens repoTokenCreator, idempotency idempotencyDoer, baseURL string) http.Handler {
+	if idempotency == nil {
+		idempotency = newMemoryIdempotencyStore(nil)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rawRepoID := strings.TrimSpace(r.PathValue("repoID"))
 		if rawRepoID == "" {
@@ -61,31 +67,85 @@ func createRepoTokenHandler(tokens repoTokenCreator, baseURL string) http.Handle
 			return
 		}
 
-		token, err := tokens.CreateRepoToken(r.Context(), createRepoTokenInput{
-			RepoID:     repoID,
-			Scope:      request.Scope,
-			Subject:    request.Subject,
-			TTLSeconds: request.TTLSeconds,
-		})
-		if errors.Is(err, errRepoNotFound) {
-			writeError(w, http.StatusNotFound, "repo not found")
-			return
+		create := func() (createRepoTokenResponse, error) {
+			token, err := tokens.CreateRepoToken(r.Context(), createRepoTokenInput{
+				RepoID:     repoID,
+				Scope:      request.Scope,
+				Subject:    request.Subject,
+				TTLSeconds: request.TTLSeconds,
+			})
+			if err != nil {
+				return createRepoTokenResponse{}, err
+			}
+			return createRepoTokenResponse{
+				Token:     token.Token,
+				ExpiresAt: token.ExpiresAt.Format(time.RFC3339),
+				GitURL:    repoGitURL(baseURL, token.RepoID),
+				Scope:     token.Scope,
+				Subject:   token.Subject,
+			}, nil
 		}
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "repo token could not be created")
+
+		idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		if idempotencyKey != "" {
+			result, err := idempotency.Do(r.Context(), idempotencyInput{
+				Scope:       createRepoTokenIdempotencyScope(repoID),
+				Key:         idempotencyKey,
+				RequestHash: createRepoTokenRequestHash(repoID, request),
+			}, create)
+			if err != nil {
+				writeCreateRepoTokenError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusCreated, result.Response)
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, createRepoTokenResponse{
-			Token:     token.Token,
-			ExpiresAt: token.ExpiresAt.Format(time.RFC3339),
-			GitURL:    repoGitURL(baseURL, token.RepoID),
-			Scope:     token.Scope,
-			Subject:   token.Subject,
-		})
+		response, err := create()
+		if err != nil {
+			writeCreateRepoTokenError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, response)
 	})
 }
 
 func isRepoTokenScope(scope string) bool {
 	return scope == "read" || scope == "write" || scope == "readwrite"
+}
+
+func writeCreateRepoTokenError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errIdempotencyConflict) {
+		writeError(w, http.StatusConflict, "idempotency key already used for a different token request")
+		return
+	}
+	if errors.Is(err, errRepoNotFound) {
+		writeError(w, http.StatusNotFound, "repo not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "repo token could not be created")
+}
+
+func createRepoTokenIdempotencyScope(repoID string) string {
+	return "POST /v1/repos/" + formatRepoControlID(repoID) + "/tokens"
+}
+
+func createRepoTokenRequestHash(repoID string, request createRepoTokenRequest) string {
+	payload := struct {
+		RepoID     string `json:"repoID"`
+		Scope      string `json:"scope"`
+		TTLSeconds int    `json:"ttlSeconds"`
+		Subject    string `json:"subject"`
+	}{
+		RepoID:     repoID,
+		Scope:      request.Scope,
+		TTLSeconds: request.TTLSeconds,
+		Subject:    request.Subject,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }

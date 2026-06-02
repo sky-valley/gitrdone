@@ -235,6 +235,91 @@ func TestTokenProvisioningContract(t *testing.T) {
 		}
 	})
 
+	t.Run("repo token creation is idempotent by caller key", func(t *testing.T) {
+		created := createRepoFixture(t, server, "idempotent-token")
+		requestBody := `{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-import:imp_123:source-read"}`
+		headers := map[string]string{
+			"Authorization":   controlAuthorization,
+			"Content-Type":    "application/json",
+			"Idempotency-Key": "differ:import:imp_123:source-read-token",
+		}
+
+		firstRes, firstBody := requestWithHeaders(t, server, http.MethodPost, "/v1/repos/"+created.ID+"/tokens", headers, requestBody)
+		secondRes, secondBody := requestWithHeaders(t, server, http.MethodPost, "/v1/repos/"+created.ID+"/tokens", headers, requestBody)
+
+		requireStatus(t, firstRes, firstBody, http.StatusCreated)
+		requireStatus(t, secondRes, secondBody, http.StatusCreated)
+		if string(secondBody) != string(firstBody) {
+			t.Fatalf("second idempotent response differed:\nfirst:  %s\nsecond: %s", string(firstBody), string(secondBody))
+		}
+
+		var got struct {
+			Token string `json:"token"`
+		}
+		decodeJSON(t, secondRes, secondBody, &got)
+		if got.Token == "" {
+			t.Fatal("replayed token is empty")
+		}
+	})
+
+	t.Run("repo token idempotency key conflicts on different request", func(t *testing.T) {
+		created := createRepoFixture(t, server, "idempotent-token-conflict")
+		headers := map[string]string{
+			"Authorization":   controlAuthorization,
+			"Content-Type":    "application/json",
+			"Idempotency-Key": "differ:adaptation-run:run_123:push-token",
+		}
+		firstRequest := `{"scope":"write","ttlSeconds":3600,"subject":"differ-run:run_123:push"}`
+		changedRequest := `{"scope":"read","ttlSeconds":3600,"subject":"differ-run:run_123:push"}`
+
+		res, body := requestWithHeaders(t, server, http.MethodPost, "/v1/repos/"+created.ID+"/tokens", headers, firstRequest)
+		requireStatus(t, res, body, http.StatusCreated)
+
+		res, body = requestWithHeaders(t, server, http.MethodPost, "/v1/repos/"+created.ID+"/tokens", headers, changedRequest)
+
+		requireStatus(t, res, body, http.StatusConflict)
+		var got struct {
+			Error string `json:"error"`
+		}
+		decodeJSON(t, res, body, &got)
+		if got.Error != "idempotency key already used for a different token request" {
+			t.Fatalf("error = %q, want idempotency conflict", got.Error)
+		}
+	})
+
+	t.Run("repo token idempotency keys are scoped by repo", func(t *testing.T) {
+		firstRepo := createRepoFixture(t, server, "idempotent-token-repo-one")
+		secondRepo := createRepoFixture(t, server, "idempotent-token-repo-two")
+		requestBody := `{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`
+		headers := map[string]string{
+			"Authorization":   controlAuthorization,
+			"Content-Type":    "application/json",
+			"Idempotency-Key": "differ:shared:reader-token",
+		}
+
+		firstRes, firstBody := requestWithHeaders(t, server, http.MethodPost, "/v1/repos/"+firstRepo.ID+"/tokens", headers, requestBody)
+		secondRes, secondBody := requestWithHeaders(t, server, http.MethodPost, "/v1/repos/"+secondRepo.ID+"/tokens", headers, requestBody)
+
+		requireStatus(t, firstRes, firstBody, http.StatusCreated)
+		requireStatus(t, secondRes, secondBody, http.StatusCreated)
+		var first struct {
+			Token  string `json:"token"`
+			GitURL string `json:"gitUrl"`
+		}
+		var second struct {
+			Token  string `json:"token"`
+			GitURL string `json:"gitUrl"`
+		}
+		decodeJSON(t, firstRes, firstBody, &first)
+		decodeJSON(t, secondRes, secondBody, &second)
+		if first.Token == second.Token {
+			t.Fatalf("same idempotency key across repos returned same token %q", first.Token)
+		}
+		if first.GitURL == second.GitURL {
+			t.Fatalf("same idempotency key across repos returned same gitUrl %q", first.GitURL)
+		}
+	})
+
 	t.Run("repo token can be issued for an external contributor subject", func(t *testing.T) {
 		created := createRepoFixture(t, server, "contributor-token")
 		res, body := request(
@@ -402,13 +487,22 @@ func TestControlAuthContract(t *testing.T) {
 
 func request(t *testing.T, server http.Handler, method, target, auth, contentType, body string) (*http.Response, []byte) {
 	t.Helper()
-
-	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	headers := map[string]string{}
 	if auth != "" {
-		req.Header.Set("Authorization", auth)
+		headers["Authorization"] = auth
 	}
 	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+		headers["Content-Type"] = contentType
+	}
+	return requestWithHeaders(t, server, method, target, headers, body)
+}
+
+func requestWithHeaders(t *testing.T, server http.Handler, method, target string, headers map[string]string, body string) (*http.Response, []byte) {
+	t.Helper()
+
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	for key, value := range headers {
+		req.Header.Set(key, value)
 	}
 
 	rec := httptest.NewRecorder()

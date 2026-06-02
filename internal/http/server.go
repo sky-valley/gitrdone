@@ -14,6 +14,7 @@ func NewServer(config Config) http.Handler {
 	}
 	repos := newMemoryRepoStore(nil)
 	repos.gitStorage = newFilesystemGitStorage(config.StorageRoot)
+	idempotency := newMemoryIdempotencyStore(nil)
 
 	return NewMux(Handlers{
 		AgentDocs:       agentDocsHandler(config.BaseURL),
@@ -21,7 +22,7 @@ func NewServer(config Config) http.Handler {
 		CreateRepo:      control(createRepoHandler(repos, config.BaseURL)),
 		GetRepo:         control(getRepoHandler(repos, config.BaseURL)),
 		ArchiveRepo:     control(archiveRepoHandler(repos)),
-		CreateRepoToken: control(createRepoTokenHandler(repos, config.BaseURL)),
+		CreateRepoToken: control(createRepoTokenHandler(repos, idempotency, config.BaseURL)),
 		GitSmartHTTP:    gitSmartHTTPHandler(repos, execGitHTTPBackend{}),
 	})
 }
