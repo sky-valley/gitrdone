@@ -69,7 +69,7 @@ Repo tokens are capability grants, not user identity sessions. The token subject
 - write: push
 - readwrite: clone, fetch, pull, push
 
-Normal Git clients should use Basic auth, usually through the tokenized gitUrl returned by POST /v1/repos/{repoID}/tokens. Bearer auth is also accepted by Git routes for service callers.
+Normal Git clients should use Basic auth with username x-access-token and a repo token as the password. Do not persist repo tokens in remote URLs. Bearer auth is also accepted by Git routes for service callers.
 
 ## Agent-safe surfaces
 
@@ -106,7 +106,7 @@ Git smart HTTP for normal Git clients:
 Prefer ordinary Git commands over handcrafted protocol requests:
 
 `+"```bash"+`
-git clone <tokenized gitUrl>
+git clone <gitUrl>
 git fetch
 git pull
 git push origin main
@@ -225,6 +225,7 @@ Sitemap: %[1]s/sitemap.xml
 
 func writeText(w http.ResponseWriter, status int, contentType string, value string) {
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(value))
 }

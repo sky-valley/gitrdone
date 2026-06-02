@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	httpapi "skyvalley.ac/m/v2/internal/http"
 )
@@ -15,6 +16,10 @@ const (
 	defaultAddr        = ":8080"
 	defaultBaseURL     = "http://localhost:8080"
 	defaultStorageRoot = ".storage"
+
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultIdleTimeout       = 60 * time.Second
+	defaultMaxHeaderBytes    = 32 * 1024
 )
 
 type config struct {
@@ -34,18 +39,25 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := &http.Server{
+	server := newHTTPServer(cfg)
+
+	log.Printf("giterdone listening on %s, storage=%s", cfg.addr, storageRoot)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+}
+
+func newHTTPServer(cfg config) *http.Server {
+	return &http.Server{
 		Addr: cfg.addr,
 		Handler: httpapi.NewServer(httpapi.Config{
 			BaseURL:       cfg.baseURL,
 			ControlBearer: cfg.controlBearer,
 			StorageRoot:   cfg.storageRoot,
 		}),
-	}
-
-	log.Printf("giterdone listening on %s, storage=%s", cfg.addr, storageRoot)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		ReadHeaderTimeout: defaultReadHeaderTimeout,
+		IdleTimeout:       defaultIdleTimeout,
+		MaxHeaderBytes:    defaultMaxHeaderBytes,
 	}
 }
 

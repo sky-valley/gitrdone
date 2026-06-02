@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"bytes"
 	"net/http"
+	"strings"
 	"testing"
 
 	httpapi "skyvalley.ac/m/v2/internal/http"
@@ -125,15 +126,21 @@ func TestGitSmartHTTPPreflightContract(t *testing.T) {
 
 		res, body = request(t, server, http.MethodGet, "/git/repos/"+repo.ID+".git/info/refs?service=git-upload-pack", bearer(token.Token), "", "")
 
-		requireStatus(t, res, body, http.StatusGone)
+		requireStatus(t, res, body, http.StatusUnauthorized)
+		if strings.Contains(string(body), "archived") {
+			t.Fatalf("git auth body leaked archive state: %q", string(body))
+		}
 	})
 
-	t.Run("unknown repo id is not found", func(t *testing.T) {
+	t.Run("unknown repo id does not leak repo existence", func(t *testing.T) {
 		server := newGitPreflightServer(t)
 
 		res, body := request(t, server, http.MethodGet, "/git/repos/repo_00000000-0000-4000-8000-000000000000.git/info/refs?service=git-upload-pack", bearer("gtd_unknown"), "", "")
 
-		requireStatus(t, res, body, http.StatusNotFound)
+		requireStatus(t, res, body, http.StatusUnauthorized)
+		if strings.Contains(string(body), "not found") {
+			t.Fatalf("git auth body leaked repo existence: %q", string(body))
+		}
 	})
 }
 

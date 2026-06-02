@@ -20,6 +20,7 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 
 		requireStatus(t, res, body, http.StatusOK)
 		requireContentType(t, res, "text/markdown")
+		requireNoSniff(t, res)
 		requireBodyIncludes(t, body, "# giterdone")
 		requireBodyIncludes(t, body, "/llms.txt")
 		requireBodyIncludes(t, body, "/AGENTS.md")
@@ -31,6 +32,7 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 
 		requireStatus(t, res, body, http.StatusOK)
 		requireContentType(t, res, "text/plain")
+		requireNoSniff(t, res)
 		requireBodyIncludes(t, body, "# giterdone")
 		requireBodyIncludes(t, body, "> giterdone is an authenticated Git smart HTTP service")
 		requireBodyIncludes(t, body, "[Agent guide](https://git.example.com/AGENTS.md)")
@@ -55,6 +57,7 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 
 				requireStatus(t, res, body, http.StatusOK)
 				requireContentType(t, res, "text/markdown")
+				requireNoSniff(t, res)
 				requireBodyIncludes(t, body, "## Agent-safe surfaces")
 				requireBodyIncludes(t, body, "POST /v1/repos/{repoID}/tokens")
 				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/info/refs?service=git-upload-pack")
@@ -68,6 +71,7 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 
 		requireStatus(t, res, body, http.StatusOK)
 		requireContentType(t, res, "text/plain")
+		requireNoSniff(t, res)
 		requireBodyIncludes(t, body, "User-agent: *")
 		requireBodyIncludes(t, body, "Allow: /llms.txt")
 		requireBodyIncludes(t, body, "Sitemap: https://git.example.com/sitemap.xml")
@@ -78,6 +82,7 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 
 		requireStatus(t, res, body, http.StatusOK)
 		requireContentType(t, res, "text/markdown")
+		requireNoSniff(t, res)
 		requireBodyIncludes(t, body, "[llms.txt](https://git.example.com/llms.txt)")
 		requireBodyIncludes(t, body, "[Agent guide](https://git.example.com/AGENTS.md)")
 		requireBodyIncludes(t, body, "[Health](https://git.example.com/healthz)")
@@ -88,6 +93,7 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 
 		requireStatus(t, res, body, http.StatusOK)
 		requireContentType(t, res, "application/xml")
+		requireNoSniff(t, res)
 		requireBodyIncludes(t, body, "<loc>https://git.example.com/llms.txt</loc>")
 		requireBodyIncludes(t, body, "<loc>https://git.example.com/AGENTS.md</loc>")
 		requireBodyIncludes(t, body, "<loc>https://git.example.com/healthz</loc>")
@@ -98,6 +104,13 @@ func requireContentType(t *testing.T, res *http.Response, wantPrefix string) {
 	t.Helper()
 	if got := res.Header.Get("Content-Type"); !strings.HasPrefix(got, wantPrefix) {
 		t.Fatalf("Content-Type = %q, want prefix %q", got, wantPrefix)
+	}
+}
+
+func requireNoSniff(t *testing.T, res *http.Response) {
+	t.Helper()
+	if got := res.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
 	}
 }
 

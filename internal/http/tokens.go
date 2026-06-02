@@ -37,7 +37,7 @@ func createRepoTokenHandler(tokens repoTokenCreator, baseURL string) http.Handle
 		}
 
 		var request createRepoTokenRequest
-		if err := decodeJSON(r, &request); err != nil {
+		if err := decodeJSON(w, r, &request); err != nil {
 			writeError(w, http.StatusBadRequest, "request body must be valid JSON for create repo token")
 			return
 		}
@@ -50,6 +50,10 @@ func createRepoTokenHandler(tokens repoTokenCreator, baseURL string) http.Handle
 		}
 		if request.Subject == "" {
 			writeError(w, http.StatusBadRequest, "subject is required")
+			return
+		}
+		if errMessage := validateTokenSubject(request.Subject); errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
 			return
 		}
 		if request.TTLSeconds < 1 || request.TTLSeconds > maxRepoTokenTTLSeconds {
@@ -75,7 +79,7 @@ func createRepoTokenHandler(tokens repoTokenCreator, baseURL string) http.Handle
 		writeJSON(w, http.StatusCreated, createRepoTokenResponse{
 			Token:     token.Token,
 			ExpiresAt: token.ExpiresAt.Format(time.RFC3339),
-			GitURL:    repoGitURLWithToken(baseURL, token.RepoID, token.Token),
+			GitURL:    repoGitURL(baseURL, token.RepoID),
 			Scope:     token.Scope,
 			Subject:   token.Subject,
 		})

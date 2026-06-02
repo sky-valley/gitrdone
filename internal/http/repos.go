@@ -36,7 +36,7 @@ type archiveRepoResponse struct {
 func createRepoHandler(repos repoCreator, baseURL string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request createRepoRequest
-		if err := decodeJSON(r, &request); err != nil {
+		if err := decodeJSON(w, r, &request); err != nil {
 			writeError(w, http.StatusBadRequest, "request body must be valid JSON for create repo")
 			return
 		}
@@ -52,8 +52,20 @@ func createRepoHandler(repos repoCreator, baseURL string) http.Handler {
 			writeError(w, http.StatusBadRequest, "namespace is required")
 			return
 		}
+		if errMessage := validateRepoSlug("namespace", request.Namespace); errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
+			return
+		}
 		if request.Name == "" {
 			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		if errMessage := validateRepoSlug("name", request.Name); errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
+			return
+		}
+		if errMessage := validateDefaultBranch(request.DefaultBranch); errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
 			return
 		}
 

@@ -102,12 +102,11 @@ func gitTokenFromRequest(r *http.Request) string {
 func writeGitAccessError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errRepoNotFound):
-		http.Error(w, "repo not found", http.StatusNotFound)
+		writeGitUnauthorized(w)
 	case errors.Is(err, errRepoArchived):
-		http.Error(w, "repo archived", http.StatusGone)
+		writeGitUnauthorized(w)
 	case errors.Is(err, errRepoTokenInvalid):
-		w.Header().Set("WWW-Authenticate", `Basic realm="giterdone"`)
-		http.Error(w, "repo token is required", http.StatusUnauthorized)
+		writeGitUnauthorized(w)
 	case errors.Is(err, errRepoTokenForbidden):
 		http.Error(w, "repo token cannot perform this git operation", http.StatusForbidden)
 	case errors.Is(err, errRepoStorageNotFound):
@@ -115,4 +114,9 @@ func writeGitAccessError(w http.ResponseWriter, err error) {
 	default:
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
+}
+
+func writeGitUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="giterdone"`)
+	http.Error(w, "repo token is required", http.StatusUnauthorized)
 }

@@ -70,6 +70,7 @@ func (storage filesystemGitStorage) repoPath(repoID string) string {
 
 func runGit(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = gitProcessEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))

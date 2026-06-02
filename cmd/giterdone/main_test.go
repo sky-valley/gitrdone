@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
 	cfg, err := configFromEnv(func(key string) string {
@@ -62,5 +65,24 @@ func TestConfigFromEnvRequiresControlBearer(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("err is nil, want missing control bearer error")
+	}
+}
+
+func TestHTTPServerUsesDefensiveTimeouts(t *testing.T) {
+	server := newHTTPServer(config{
+		addr:          "127.0.0.1:9090",
+		baseURL:       "https://git.example.com",
+		controlBearer: "internal-admin-token",
+		storageRoot:   t.TempDir(),
+	})
+
+	if server.ReadHeaderTimeout != 5*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %s, want 5s", server.ReadHeaderTimeout)
+	}
+	if server.IdleTimeout != 60*time.Second {
+		t.Fatalf("IdleTimeout = %s, want 1m0s", server.IdleTimeout)
+	}
+	if server.MaxHeaderBytes != 32*1024 {
+		t.Fatalf("MaxHeaderBytes = %d, want 32768", server.MaxHeaderBytes)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -112,6 +114,85 @@ func TestNotImplementedGitHTTPBackend(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "git http backend is not implemented") {
 		t.Fatalf("body = %q, want backend not implemented message", rec.Body.String())
 	}
+}
+
+func TestGitHTTPBackendEnvDoesNotInheritProcessSecrets(t *testing.T) {
+	t.Setenv("GITERDONE_CONTROL_BEARER", "secret-control-token")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/tmp/malicious-gitconfig")
+
+	req := httptest.NewRequest(http.MethodGet, "/git/repos/repo_00000000-0000-4000-8000-000000000001.git/info/refs?service=git-upload-pack", nil)
+	req.SetPathValue("gitPath", "info/refs")
+	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
+	req.Header.Set("Git-Protocol", "version=2")
+	grant := gitAccessGrant{
+		RepoPath: "/tmp/repos/00000000-0000-4000-8000-000000000001.git",
+		Subject:  "external:dev@example.com",
+	}
+
+	env := gitHTTPBackendEnv(req, grant)
+
+	if got, ok := envValue(env, "GITERDONE_CONTROL_BEARER"); ok {
+		t.Fatalf("backend env inherited control bearer: %q", got)
+	}
+	if got := envValueOrEmpty(env, "GIT_CONFIG_GLOBAL"); got != os.DevNull {
+		t.Fatalf("GIT_CONFIG_GLOBAL = %q, want %q", got, os.DevNull)
+	}
+	if strings.Contains(strings.Join(env, "\n"), "secret-control-token") {
+		t.Fatalf("backend env leaked control bearer: %#v", env)
+	}
+	if strings.Contains(strings.Join(env, "\n"), "/tmp/malicious-gitconfig") {
+		t.Fatalf("backend env inherited caller git config: %#v", env)
+	}
+	if got := envValueOrEmpty(env, "REMOTE_USER"); got != "external:dev@example.com" {
+		t.Fatalf("REMOTE_USER = %q, want subject", got)
+	}
+	if got := envValueOrEmpty(env, "GIT_PROTOCOL"); got != "version=2" {
+		t.Fatalf("GIT_PROTOCOL = %q, want version=2", got)
+	}
+}
+
+func TestRunGitDoesNotInheritProcessSecrets(t *testing.T) {
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf 'control=%s\n' "${GITERDONE_CONTROL_BEARER-}"
+printf 'global=%s\n' "${GIT_CONFIG_GLOBAL-}"
+exit 1
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", binDir)
+	t.Setenv("GITERDONE_CONTROL_BEARER", "secret-control-token")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/tmp/malicious-gitconfig")
+
+	err := runGit(context.Background(), "env-check")
+	if err == nil {
+		t.Fatal("runGit succeeded, want fake git failure")
+	}
+	if strings.Contains(err.Error(), "secret-control-token") {
+		t.Fatalf("runGit error leaked inherited control bearer: %v", err)
+	}
+	if strings.Contains(err.Error(), "/tmp/malicious-gitconfig") {
+		t.Fatalf("runGit error inherited caller git config: %v", err)
+	}
+}
+
+func envValueOrEmpty(env []string, key string) string {
+	value, _ := envValue(env, key)
+	return value
+}
+
+func envValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for _, entry := range env {
+		value, ok := strings.CutPrefix(entry, prefix)
+		if ok {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 type recordingGitAccessAuthorizer struct {

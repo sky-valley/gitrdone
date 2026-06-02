@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -63,8 +62,7 @@ func (backend execGitHTTPBackend) ServeHTTPGit(w http.ResponseWriter, r *http.Re
 }
 
 func gitHTTPBackendEnv(r *http.Request, grant gitAccessGrant) []string {
-	env := append([]string{}, os.Environ()...)
-	env = append(env,
+	env := gitProcessEnv(
 		"GIT_PROJECT_ROOT="+filepath.Dir(grant.RepoPath),
 		"GIT_HTTP_EXPORT_ALL=1",
 		"PATH_INFO=/"+filepath.Base(grant.RepoPath)+"/"+r.PathValue("gitPath"),

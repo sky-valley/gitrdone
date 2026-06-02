@@ -62,6 +62,73 @@ func TestControlAPIContract(t *testing.T) {
 		assertBareRepoStorage(t, storageRoot, got.ID, "main")
 	})
 
+	t.Run("create repo validates control input shape", func(t *testing.T) {
+		tests := []struct {
+			name string
+			body string
+			want string
+		}{
+			{
+				name: "invalid namespace",
+				body: `{"namespace":"differ/team","name":"project","defaultBranch":"main"}`,
+				want: "namespace must be 1-128 characters and contain only letters, numbers, dot, underscore, or dash",
+			},
+			{
+				name: "invalid name",
+				body: `{"namespace":"differ","name":"project alpha","defaultBranch":"main"}`,
+				want: "name must be 1-128 characters and contain only letters, numbers, dot, underscore, or dash",
+			},
+			{
+				name: "invalid default branch",
+				body: `{"namespace":"differ","name":"project-branch","defaultBranch":"main..bad"}`,
+				want: "defaultBranch must be a valid branch name",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				res, body := request(t, server, http.MethodPost, "/v1/repos", controlAuthorization, "application/json", tt.body)
+
+				requireStatus(t, res, body, http.StatusBadRequest)
+				var got struct {
+					Error string `json:"error"`
+				}
+				decodeJSON(t, res, body, &got)
+				if got.Error != tt.want {
+					t.Fatalf("error = %q, want %q", got.Error, tt.want)
+				}
+			})
+		}
+	})
+
+	t.Run("create repo rejects trailing JSON", func(t *testing.T) {
+		res, body := request(t, server, http.MethodPost, "/v1/repos", controlAuthorization, "application/json", `{"namespace":"differ","name":"json-trailing","defaultBranch":"main"} {}`)
+
+		requireStatus(t, res, body, http.StatusBadRequest)
+		var got struct {
+			Error string `json:"error"`
+		}
+		decodeJSON(t, res, body, &got)
+		if got.Error != "request body must be valid JSON for create repo" {
+			t.Fatalf("error = %q, want valid JSON error", got.Error)
+		}
+	})
+
+	t.Run("create repo rejects oversized JSON bodies", func(t *testing.T) {
+		oversized := strings.Repeat(" ", 70*1024) + `{"namespace":"differ","name":"json-oversized","defaultBranch":"main"}`
+
+		res, body := request(t, server, http.MethodPost, "/v1/repos", controlAuthorization, "application/json", oversized)
+
+		requireStatus(t, res, body, http.StatusBadRequest)
+		var got struct {
+			Error string `json:"error"`
+		}
+		decodeJSON(t, res, body, &got)
+		if got.Error != "request body must be valid JSON for create repo" {
+			t.Fatalf("error = %q, want valid JSON error", got.Error)
+		}
+	})
+
 	t.Run("repo lookup returns the public repo identity", func(t *testing.T) {
 		created := createRepoFixture(t, server, "lookup")
 		res, body := request(t, server, http.MethodGet, "/v1/repos/"+created.ID, controlAuthorization, "", "")
@@ -153,9 +220,12 @@ func TestTokenProvisioningContract(t *testing.T) {
 			t.Fatalf("subject = %q, want differ-bootstrap-job-abc", got.Subject)
 		}
 		assertFutureExpiryWithin(t, got.ExpiresAt, time.Hour)
-		wantGitURLPart := "x-access-token:" + got.Token + "@git.example.com/git/repos/" + created.ID + ".git"
-		if !strings.Contains(got.GitURL, wantGitURLPart) {
-			t.Fatalf("gitUrl does not embed token for normal git clients: %q", got.GitURL)
+		wantGitURL := "https://git.example.com/git/repos/" + created.ID + ".git"
+		if got.GitURL != wantGitURL {
+			t.Fatalf("gitUrl = %q, want %q", got.GitURL, wantGitURL)
+		}
+		if strings.Contains(got.GitURL, got.Token) {
+			t.Fatalf("gitUrl embeds token: %q", got.GitURL)
 		}
 
 		var raw map[string]any
@@ -215,9 +285,19 @@ func TestTokenProvisioningContract(t *testing.T) {
 				want: "subject is required",
 			},
 			{
+				name: "invalid subject",
+				body: `{"scope":"read","ttlSeconds":3600,"subject":"external dev@example.com"}`,
+				want: "subject must be 1-128 characters and contain only letters, numbers, dot, underscore, dash, slash, colon, or at sign",
+			},
+			{
 				name: "ttl too long",
 				body: `{"scope":"read","ttlSeconds":604801,"subject":"differ-bootstrap-job-abc"}`,
 				want: "ttlSeconds must be between 1 and 604800",
+			},
+			{
+				name: "trailing JSON",
+				body: `{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"} {}`,
+				want: "request body must be valid JSON for create repo token",
 			},
 			{
 				name: "kind is not part of the token model",
