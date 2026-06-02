@@ -1,37 +1,43 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"net/http"
-	"strings"
 	"testing"
 
 	httpapi "skyvalley.ac/m/v2/internal/http"
 )
 
 func TestGitSmartHTTPPreflightContract(t *testing.T) {
-	t.Run("authorized read reaches the real backend boundary", func(t *testing.T) {
+	t.Run("authorized read reaches the git backend", func(t *testing.T) {
 		server := newGitPreflightServer(t)
 		repo := createRepoFixture(t, server, "git-preflight-read")
 		token := createRepoTokenFixture(t, server, repo.ID, "read", "differ-reader-job")
 
 		res, body := request(t, server, http.MethodGet, "/git/repos/"+repo.ID+".git/info/refs?service=git-upload-pack", bearer(token.Token), "", "")
 
-		requireStatus(t, res, body, http.StatusNotImplemented)
-		if !strings.Contains(string(body), "git http backend is not implemented") {
-			t.Fatalf("body = %q, want backend not implemented message", string(body))
+		requireStatus(t, res, body, http.StatusOK)
+		if got := res.Header.Get("Content-Type"); got != "application/x-git-upload-pack-advertisement" {
+			t.Fatalf("Content-Type = %q, want upload-pack advertisement", got)
+		}
+		if !bytes.HasPrefix(body, []byte("001e# service=git-upload-pack\n")) {
+			t.Fatalf("body does not start with upload-pack advertisement: %q", string(body))
 		}
 	})
 
-	t.Run("authorized write reaches the real backend boundary", func(t *testing.T) {
+	t.Run("authorized write reaches the git backend", func(t *testing.T) {
 		server := newGitPreflightServer(t)
 		repo := createRepoFixture(t, server, "git-preflight-write")
 		token := createRepoTokenFixture(t, server, repo.ID, "write", "differ-writer-job")
 
 		res, body := request(t, server, http.MethodGet, "/git/repos/"+repo.ID+".git/info/refs?service=git-receive-pack", bearer(token.Token), "", "")
 
-		requireStatus(t, res, body, http.StatusNotImplemented)
-		if !strings.Contains(string(body), "git http backend is not implemented") {
-			t.Fatalf("body = %q, want backend not implemented message", string(body))
+		requireStatus(t, res, body, http.StatusOK)
+		if got := res.Header.Get("Content-Type"); got != "application/x-git-receive-pack-advertisement" {
+			t.Fatalf("Content-Type = %q, want receive-pack advertisement", got)
+		}
+		if !bytes.HasPrefix(body, []byte("001f# service=git-receive-pack\n")) {
+			t.Fatalf("body does not start with receive-pack advertisement: %q", string(body))
 		}
 	})
 

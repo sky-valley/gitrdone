@@ -21,7 +21,7 @@ func NewServer(config Config) http.Handler {
 		GetRepo:         control(getRepoHandler(repos, config.BaseURL)),
 		ArchiveRepo:     control(archiveRepoHandler(repos)),
 		CreateRepoToken: control(createRepoTokenHandler(repos, config.BaseURL)),
-		GitSmartHTTP:    gitSmartHTTPHandler(repos),
+		GitSmartHTTP:    gitSmartHTTPHandler(repos, execGitHTTPBackend{}),
 	})
 }
 

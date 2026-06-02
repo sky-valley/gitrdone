@@ -6,7 +6,21 @@ import (
 	"strings"
 )
 
-func gitSmartHTTPHandler(access gitAccessAuthorizer) http.Handler {
+type gitHTTPBackend interface {
+	ServeHTTPGit(w http.ResponseWriter, r *http.Request, grant gitAccessGrant) error
+}
+
+type notImplementedGitHTTPBackend struct{}
+
+func (notImplementedGitHTTPBackend) ServeHTTPGit(w http.ResponseWriter, r *http.Request, grant gitAccessGrant) error {
+	http.Error(w, "git http backend is not implemented", http.StatusNotImplemented)
+	return nil
+}
+
+func gitSmartHTTPHandler(access gitAccessAuthorizer, backend gitHTTPBackend) http.Handler {
+	if backend == nil {
+		backend = notImplementedGitHTTPBackend{}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		repoID, ok := parseRepoControlID(r.PathValue("repoID"))
 		if !ok {
@@ -28,9 +42,11 @@ func gitSmartHTTPHandler(access gitAccessAuthorizer) http.Handler {
 			writeGitAccessError(w, err)
 			return
 		}
-		_ = grant
 
-		http.Error(w, "git http backend is not implemented", http.StatusNotImplemented)
+		if err := backend.ServeHTTPGit(w, r, grant); err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 	})
 }
 

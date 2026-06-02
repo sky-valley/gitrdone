@@ -68,6 +68,7 @@ type authorizeGitAccessInput struct {
 type gitAccessGrant struct {
 	RepoID   string
 	RepoPath string
+	Subject  string
 }
 
 type repoRecord struct {
@@ -266,6 +267,7 @@ func (store *memoryRepoStore) AuthorizeGitAccess(ctx context.Context, input auth
 	return gitAccessGrant{
 		RepoID:   repo.ID,
 		RepoPath: repoPath,
+		Subject:  token.Subject,
 	}, nil
 }
 
