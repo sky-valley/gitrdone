@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -37,18 +38,22 @@ func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
 	if cfg.databaseURL != "" {
 		t.Fatalf("databaseURL = %q, want empty", cfg.databaseURL)
 	}
+	if cfg.shutdownTimeout != defaultShutdownTimeout {
+		t.Fatalf("shutdownTimeout = %s, want %s", cfg.shutdownTimeout, defaultShutdownTimeout)
+	}
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "127.0.0.1")
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "::1")
 }
 
 func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	values := map[string]string{
-		"GITRDONE_ADDR":            "127.0.0.1:9090",
-		"GITRDONE_BASE_URL":        "https://git.example.com",
-		"GITRDONE_CONTROL_BEARER":  "internal-admin-token",
-		"GITRDONE_DATABASE_URL":    "postgres://gitrdone:secret@db.example.com:5432/gitrdone?sslmode=require",
-		"GITRDONE_STORAGE_ROOT":    "/var/lib/gitrdone",
-		"GITRDONE_TRUSTED_PROXIES": "10.0.0.0/8,192.0.2.10",
+		"GITRDONE_ADDR":             "127.0.0.1:9090",
+		"GITRDONE_BASE_URL":         "https://git.example.com",
+		"GITRDONE_CONTROL_BEARER":   "internal-admin-token",
+		"GITRDONE_DATABASE_URL":     "postgres://gitrdone:secret@db.example.com:5432/gitrdone?sslmode=require",
+		"GITRDONE_STORAGE_ROOT":     "/var/lib/gitrdone",
+		"GITRDONE_TRUSTED_PROXIES":  "10.0.0.0/8,192.0.2.10",
+		"GITRDONE_SHUTDOWN_TIMEOUT": "30s",
 	}
 
 	cfg, err := configFromEnv(func(key string) string {
@@ -72,6 +77,9 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	}
 	if cfg.databaseURL != "postgres://gitrdone:secret@db.example.com:5432/gitrdone?sslmode=require" {
 		t.Fatalf("databaseURL = %q, want configured Postgres URL", cfg.databaseURL)
+	}
+	if cfg.shutdownTimeout != 30*time.Second {
+		t.Fatalf("shutdownTimeout = %s, want 30s", cfg.shutdownTimeout)
 	}
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "10.20.30.40")
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "192.0.2.10")
@@ -100,6 +108,38 @@ func TestConfigFromEnvRejectsInvalidTrustedProxy(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("err is nil, want invalid trusted proxy error")
+	}
+}
+
+func TestConfigFromEnvRejectsInvalidShutdownTimeout(t *testing.T) {
+	_, err := configFromEnv(func(key string) string {
+		switch key {
+		case "GITRDONE_CONTROL_BEARER":
+			return "internal-admin-token"
+		case "GITRDONE_SHUTDOWN_TIMEOUT":
+			return "eventually"
+		default:
+			return ""
+		}
+	})
+	if err == nil {
+		t.Fatal("err is nil, want invalid shutdown timeout error")
+	}
+}
+
+func TestConfigFromEnvRejectsNonPositiveShutdownTimeout(t *testing.T) {
+	_, err := configFromEnv(func(key string) string {
+		switch key {
+		case "GITRDONE_CONTROL_BEARER":
+			return "internal-admin-token"
+		case "GITRDONE_SHUTDOWN_TIMEOUT":
+			return "0s"
+		default:
+			return ""
+		}
+	})
+	if err == nil {
+		t.Fatal("err is nil, want non-positive shutdown timeout error")
 	}
 }
 
@@ -176,6 +216,144 @@ func TestHTTPServerEmitsAccessLogsWithTrustedForwardedHeaders(t *testing.T) {
 	}
 }
 
+func TestRunServerShutsDownWhenContextIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	listening := make(chan struct{})
+	allowServeReturn := make(chan struct{})
+	shutdownCalled := make(chan struct{})
+	closeCalled := make(chan struct{})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runServer(ctx, serverLifecycle{
+			listenAndServe: func() error {
+				close(listening)
+				<-allowServeReturn
+				return http.ErrServerClosed
+			},
+			shutdown: func(context.Context) error {
+				close(shutdownCalled)
+				close(allowServeReturn)
+				return nil
+			},
+			closeResources: func() error {
+				close(closeCalled)
+				return nil
+			},
+			shutdownTimeout: time.Minute,
+		})
+	}()
+
+	<-listening
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("runServer error = %v, want nil", err)
+	}
+	requireClosed(t, shutdownCalled, "shutdown")
+	requireClosed(t, closeCalled, "close resources")
+}
+
+func TestRunServerWaitsForShutdownBeforeReturning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	listening := make(chan struct{})
+	shutdownStarted := make(chan struct{})
+	finishShutdown := make(chan struct{})
+	allowServeReturn := make(chan struct{})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runServer(ctx, serverLifecycle{
+			listenAndServe: func() error {
+				close(listening)
+				<-allowServeReturn
+				return http.ErrServerClosed
+			},
+			shutdown: func(context.Context) error {
+				close(shutdownStarted)
+				<-finishShutdown
+				close(allowServeReturn)
+				return nil
+			},
+			closeResources:  func() error { return nil },
+			shutdownTimeout: time.Minute,
+		})
+	}()
+
+	<-listening
+	cancel()
+	<-shutdownStarted
+	select {
+	case err := <-done:
+		t.Fatalf("runServer returned before shutdown finished: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	close(finishShutdown)
+	if err := <-done; err != nil {
+		t.Fatalf("runServer error = %v, want nil", err)
+	}
+}
+
+func TestRunServerReturnsShutdownTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	listening := make(chan struct{})
+	allowServeReturn := make(chan struct{})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runServer(ctx, serverLifecycle{
+			listenAndServe: func() error {
+				close(listening)
+				<-allowServeReturn
+				return http.ErrServerClosed
+			},
+			shutdown: func(ctx context.Context) error {
+				<-ctx.Done()
+				close(allowServeReturn)
+				return ctx.Err()
+			},
+			closeResources:  func() error { return nil },
+			shutdownTimeout: time.Nanosecond,
+		})
+	}()
+
+	<-listening
+	cancel()
+
+	err := <-done
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runServer error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestRunServerClosesResourcesWhenListenFails(t *testing.T) {
+	listenErr := errors.New("listen failed")
+	closeCalled := false
+
+	err := runServer(context.Background(), serverLifecycle{
+		listenAndServe: func() error {
+			return listenErr
+		},
+		shutdown: func(context.Context) error {
+			t.Fatal("shutdown called, want none")
+			return nil
+		},
+		closeResources: func() error {
+			closeCalled = true
+			return nil
+		},
+		shutdownTimeout: time.Minute,
+	})
+
+	if !errors.Is(err, listenErr) {
+		t.Fatalf("runServer error = %v, want listen error", err)
+	}
+	if !closeCalled {
+		t.Fatal("closeResources was not called")
+	}
+}
+
 func requireTrustedProxy(t *testing.T, prefixes []netip.Prefix, ip string) {
 	t.Helper()
 	addr := netip.MustParseAddr(ip)
@@ -194,5 +372,14 @@ func requireUntrustedProxy(t *testing.T, prefixes []netip.Prefix, ip string) {
 		if prefix.Contains(addr) {
 			t.Fatalf("%s is trusted by %v, want untrusted", ip, prefixes)
 		}
+	}
+}
+
+func requireClosed(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	default:
+		t.Fatalf("%s was not called", name)
 	}
 }

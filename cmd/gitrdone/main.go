@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	httpapi "skyvalley.ac/m/v2/internal/http"
@@ -24,6 +26,7 @@ const (
 	defaultReadHeaderTimeout = 5 * time.Second
 	defaultIdleTimeout       = 60 * time.Second
 	defaultMaxHeaderBytes    = 32 * 1024
+	defaultShutdownTimeout   = 2 * time.Minute
 )
 
 var defaultTrustedProxyPrefixes = []netip.Prefix{
@@ -38,11 +41,14 @@ type config struct {
 	storageRoot          string
 	databaseURL          string
 	trustedProxyPrefixes []netip.Prefix
+	shutdownTimeout      time.Duration
 	accessLog            io.Writer
 }
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg, err := configFromEnv(os.Getenv)
 	if err != nil {
 		log.Fatal(err)
@@ -57,16 +63,58 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func() {
-		if err := closeServer(); err != nil {
-			log.Printf("close server resources: %v", err)
-		}
-	}()
 
 	log.Printf("gitrdone listening on %s, storage=%s", cfg.addr, storageRoot)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := runServer(ctx, serverLifecycle{
+		listenAndServe:  server.ListenAndServe,
+		shutdown:        server.Shutdown,
+		closeResources:  closeServer,
+		shutdownTimeout: cfg.shutdownTimeout,
+	}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+type serverLifecycle struct {
+	listenAndServe  func() error
+	shutdown        func(context.Context) error
+	closeResources  func() error
+	shutdownTimeout time.Duration
+}
+
+func runServer(ctx context.Context, lifecycle serverLifecycle) error {
+	serverErr := make(chan error, 1)
+	go func() {
+		err := lifecycle.listenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		serverErr <- err
+	}()
+
+	select {
+	case err := <-serverErr:
+		return errors.Join(err, closeResources(lifecycle.closeResources))
+	case <-ctx.Done():
+	}
+
+	timeout := lifecycle.shutdownTimeout
+	if timeout <= 0 {
+		timeout = defaultShutdownTimeout
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	shutdownErr := lifecycle.shutdown(shutdownCtx)
+	listenErr := <-serverErr
+	return errors.Join(shutdownErr, listenErr, closeResources(lifecycle.closeResources))
+}
+
+func closeResources(closeFunc func() error) error {
+	if closeFunc == nil {
+		return nil
+	}
+	return closeFunc()
 }
 
 func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error, error) {
@@ -119,6 +167,17 @@ func configFromEnv(getenv func(string) string) (config, error) {
 		databaseURL:          strings.TrimSpace(getenv("GITRDONE_DATABASE_URL")),
 		storageRoot:          strings.TrimSpace(getenv("GITRDONE_STORAGE_ROOT")),
 		trustedProxyPrefixes: trustedProxyPrefixes,
+		shutdownTimeout:      defaultShutdownTimeout,
+	}
+	if raw := strings.TrimSpace(getenv("GITRDONE_SHUTDOWN_TIMEOUT")); raw != "" {
+		timeout, err := time.ParseDuration(raw)
+		if err != nil {
+			return config{}, fmt.Errorf("GITRDONE_SHUTDOWN_TIMEOUT must be a valid duration: %w", err)
+		}
+		if timeout <= 0 {
+			return config{}, errors.New("GITRDONE_SHUTDOWN_TIMEOUT must be greater than zero")
+		}
+		cfg.shutdownTimeout = timeout
 	}
 	if cfg.addr == "" {
 		cfg.addr = defaultAddr

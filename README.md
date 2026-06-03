@@ -25,6 +25,7 @@ Defaults:
 | `GITRDONE_DATABASE_URL` | unset | Postgres URL for durable control metadata |
 | `GITRDONE_CONTROL_BEARER` | required | Bearer token for `/v1` control routes |
 | `GITRDONE_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | Comma-separated proxy IPs/CIDRs whose forwarded headers may identify the client |
+| `GITRDONE_SHUTDOWN_TIMEOUT` | `2m` | Maximum time to wait for graceful shutdown after `SIGINT` or `SIGTERM` |
 
 The service logs the absolute storage root on startup.
 
@@ -55,6 +56,13 @@ request bodies, or response bodies.
 `X-Forwarded-For`, `X-Real-IP`, and `X-Forwarded-Proto` are used only when the
 immediate peer matches `GITRDONE_TRUSTED_PROXIES`. The default trusts loopback,
 which fits a local Caddy reverse proxy in front of `127.0.0.1:8080`.
+
+## Shutdown
+
+On `SIGINT` or `SIGTERM`, gitrdone calls `http.Server.Shutdown` and waits for
+active requests to finish up to `GITRDONE_SHUTDOWN_TIMEOUT`. During this first
+step there is no separate drain gate; restart behavior relies on Go's HTTP
+server graceful shutdown semantics.
 
 ## Storage Model
 
