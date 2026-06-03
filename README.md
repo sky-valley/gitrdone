@@ -24,8 +24,37 @@ Defaults:
 | `GITRDONE_STORAGE_ROOT` | `.storage` | Filesystem root for bare Git repos |
 | `GITRDONE_DATABASE_URL` | unset | Postgres URL for durable control metadata |
 | `GITRDONE_CONTROL_BEARER` | required | Bearer token for `/v1` control routes |
+| `GITRDONE_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | Comma-separated proxy IPs/CIDRs whose forwarded headers may identify the client |
 
 The service logs the absolute storage root on startup.
+
+## Access Logs
+
+gitrdone writes one JSON access log line per HTTP request to stdout. Logs are
+for auditability, not application tracing.
+
+`GET /` and `GET /healthz` are intentionally skipped to avoid logging routine
+agent discovery and health probe noise.
+
+Logged fields:
+
+- `timestamp`
+- `method`
+- `path`
+- `status`
+- `bytes`
+- `durationMs`
+- `remoteIp`
+- `scheme`
+- `host`
+- `userAgent`
+
+Access logs do not include query strings, authorization headers, cookies,
+request bodies, or response bodies.
+
+`X-Forwarded-For`, `X-Real-IP`, and `X-Forwarded-Proto` are used only when the
+immediate peer matches `GITRDONE_TRUSTED_PROXIES`. The default trusts loopback,
+which fits a local Caddy reverse proxy in front of `127.0.0.1:8080`.
 
 ## Storage Model
 

@@ -1,11 +1,17 @@
 package httpapi
 
-import "net/http"
+import (
+	"io"
+	"net/http"
+	"net/netip"
+)
 
 type Config struct {
-	BaseURL       string
-	ControlBearer string
-	StorageRoot   string
+	BaseURL              string
+	ControlBearer        string
+	StorageRoot          string
+	AccessLog            io.Writer
+	TrustedProxyPrefixes []netip.Prefix
 }
 
 func NewServer(config Config) http.Handler {
@@ -22,7 +28,7 @@ func NewServerWithStores(config Config, repos repoStore, idempotency idempotency
 		idempotency = newMemoryIdempotencyStore(nil)
 	}
 
-	return NewMux(Handlers{
+	mux := NewMux(Handlers{
 		AgentDocs:       agentDocsHandler(config.BaseURL),
 		Healthz:         noContent(),
 		CreateRepo:      control(createRepoHandler(repos, config.BaseURL)),
@@ -33,6 +39,7 @@ func NewServerWithStores(config Config, repos repoStore, idempotency idempotency
 		RevokeRepoToken: control(revokeRepoTokenHandler(repos)),
 		GitSmartHTTP:    gitSmartHTTPHandler(repos, execGitHTTPBackend{}),
 	})
+	return accessLog(config.AccessLog, config.TrustedProxyPrefixes, mux)
 }
 
 func internalServerError() http.Handler {
