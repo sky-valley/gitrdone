@@ -10,6 +10,8 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/getsentry/sentry-go"
 )
 
 func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
@@ -38,6 +40,18 @@ func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
 	if cfg.databaseURL != "" {
 		t.Fatalf("databaseURL = %q, want empty", cfg.databaseURL)
 	}
+	if cfg.sentryDSN != "" {
+		t.Fatalf("sentryDSN = %q, want empty", cfg.sentryDSN)
+	}
+	if cfg.sentryEnvironment != "" {
+		t.Fatalf("sentryEnvironment = %q, want empty", cfg.sentryEnvironment)
+	}
+	if cfg.sentryRelease != "" {
+		t.Fatalf("sentryRelease = %q, want empty", cfg.sentryRelease)
+	}
+	if cfg.sentryTracesSampleRate != 0 {
+		t.Fatalf("sentryTracesSampleRate = %f, want 0", cfg.sentryTracesSampleRate)
+	}
 	if cfg.shutdownTimeout != defaultShutdownTimeout {
 		t.Fatalf("shutdownTimeout = %s, want %s", cfg.shutdownTimeout, defaultShutdownTimeout)
 	}
@@ -54,6 +68,10 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 		"GITRDONE_STORAGE_ROOT":     "/var/lib/gitrdone",
 		"GITRDONE_TRUSTED_PROXIES":  "10.0.0.0/8,192.0.2.10",
 		"GITRDONE_SHUTDOWN_TIMEOUT": "30s",
+		"SENTRY_DSN":                "https://public@example.ingest.sentry.io/123",
+		"SENTRY_ENVIRONMENT":        "main",
+		"SENTRY_RELEASE":            "abc1234",
+		"SENTRY_TRACES_SAMPLE_RATE": "0.25",
 	}
 
 	cfg, err := configFromEnv(func(key string) string {
@@ -80,6 +98,18 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	}
 	if cfg.shutdownTimeout != 30*time.Second {
 		t.Fatalf("shutdownTimeout = %s, want 30s", cfg.shutdownTimeout)
+	}
+	if cfg.sentryDSN != "https://public@example.ingest.sentry.io/123" {
+		t.Fatalf("sentryDSN = %q, want configured DSN", cfg.sentryDSN)
+	}
+	if cfg.sentryEnvironment != "main" {
+		t.Fatalf("sentryEnvironment = %q, want main", cfg.sentryEnvironment)
+	}
+	if cfg.sentryRelease != "abc1234" {
+		t.Fatalf("sentryRelease = %q, want abc1234", cfg.sentryRelease)
+	}
+	if cfg.sentryTracesSampleRate != 0.25 {
+		t.Fatalf("sentryTracesSampleRate = %f, want 0.25", cfg.sentryTracesSampleRate)
 	}
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "10.20.30.40")
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "192.0.2.10")
@@ -140,6 +170,69 @@ func TestConfigFromEnvRejectsNonPositiveShutdownTimeout(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("err is nil, want non-positive shutdown timeout error")
+	}
+}
+
+func TestConfigFromEnvRejectsInvalidSentryTracesSampleRate(t *testing.T) {
+	tests := []string{"not-a-number", "-0.1", "1.1"}
+	for _, value := range tests {
+		t.Run(value, func(t *testing.T) {
+			_, err := configFromEnv(func(key string) string {
+				switch key {
+				case "GITRDONE_CONTROL_BEARER":
+					return "internal-admin-token"
+				case "SENTRY_TRACES_SAMPLE_RATE":
+					return value
+				default:
+					return ""
+				}
+			})
+			if err == nil {
+				t.Fatal("err is nil, want invalid Sentry trace sample rate error")
+			}
+		})
+	}
+}
+
+func TestSanitizeSentryEventDropsRequestSecrets(t *testing.T) {
+	event := &sentry.Event{
+		Request: &sentry.Request{
+			URL:         "https://git.example.com/v1/repos?token=query-secret",
+			Method:      http.MethodPost,
+			QueryString: "token=query-secret",
+			Cookies:     "session=cookie-secret",
+			Data:        "body-secret",
+			Headers: map[string]string{
+				"Authorization":       "Bearer header-secret",
+				"Cookie":              "session=cookie-secret",
+				"Proxy-Authorization": "Basic proxy-secret",
+				"User-Agent":          "git/2.50",
+			},
+		},
+	}
+
+	got := sanitizeSentryEvent(event, nil)
+
+	if got.Request == nil {
+		t.Fatal("Request is nil, want sanitized request context")
+	}
+	if got.Request.URL != "https://git.example.com/v1/repos" {
+		t.Fatalf("URL = %q, want query stripped", got.Request.URL)
+	}
+	if got.Request.Method != http.MethodPost {
+		t.Fatalf("Method = %q, want POST", got.Request.Method)
+	}
+	if got.Request.QueryString != "" {
+		t.Fatalf("QueryString = %q, want empty", got.Request.QueryString)
+	}
+	if got.Request.Cookies != "" {
+		t.Fatalf("Cookies = %q, want empty", got.Request.Cookies)
+	}
+	if got.Request.Data != "" {
+		t.Fatalf("Data = %q, want empty", got.Request.Data)
+	}
+	if got.Request.Headers != nil {
+		t.Fatalf("Headers = %#v, want nil", got.Request.Headers)
 	}
 }
 

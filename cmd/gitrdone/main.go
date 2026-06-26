@@ -8,12 +8,17 @@ import (
 	"log"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/getsentry/sentry-go"
+	sentryhttp "github.com/getsentry/sentry-go/http"
 
 	httpapi "skyvalley.ac/m/v2/internal/http"
 )
@@ -27,6 +32,7 @@ const (
 	defaultIdleTimeout       = 60 * time.Second
 	defaultMaxHeaderBytes    = 32 * 1024
 	defaultShutdownTimeout   = 2 * time.Minute
+	defaultSentryFlushTimeout = 2 * time.Second
 )
 
 var defaultTrustedProxyPrefixes = []netip.Prefix{
@@ -35,14 +41,18 @@ var defaultTrustedProxyPrefixes = []netip.Prefix{
 }
 
 type config struct {
-	addr                 string
-	baseURL              string
-	controlBearer        string
-	storageRoot          string
-	databaseURL          string
-	trustedProxyPrefixes []netip.Prefix
-	shutdownTimeout      time.Duration
-	accessLog            io.Writer
+	addr                   string
+	baseURL                string
+	controlBearer          string
+	storageRoot            string
+	databaseURL            string
+	trustedProxyPrefixes   []netip.Prefix
+	shutdownTimeout        time.Duration
+	accessLog              io.Writer
+	sentryDSN              string
+	sentryEnvironment      string
+	sentryRelease          string
+	sentryTracesSampleRate float64
 }
 
 func main() {
@@ -53,6 +63,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	flushSentry, err := initSentry(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer flushSentry()
 	cfg.accessLog = os.Stdout
 	storageRoot, err := filepath.Abs(cfg.storageRoot)
 	if err != nil {
@@ -142,6 +157,12 @@ func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error,
 		handler = postgresHandler
 		closeServer = closePostgres
 	}
+	if cfg.sentryDSN != "" {
+		sentryHandler := sentryhttp.New(sentryhttp.Options{
+			Repanic: true,
+		})
+		handler = sentryHandler.Handle(handler)
+	}
 	return &http.Server{
 		Addr:              cfg.addr,
 		Handler:           handler,
@@ -166,6 +187,9 @@ func configFromEnv(getenv func(string) string) (config, error) {
 		controlBearer:        strings.TrimSpace(getenv("GITRDONE_CONTROL_BEARER")),
 		databaseURL:          strings.TrimSpace(getenv("GITRDONE_DATABASE_URL")),
 		storageRoot:          strings.TrimSpace(getenv("GITRDONE_STORAGE_ROOT")),
+		sentryDSN:            strings.TrimSpace(getenv("SENTRY_DSN")),
+		sentryEnvironment:    strings.TrimSpace(getenv("SENTRY_ENVIRONMENT")),
+		sentryRelease:        strings.TrimSpace(getenv("SENTRY_RELEASE")),
 		trustedProxyPrefixes: trustedProxyPrefixes,
 		shutdownTimeout:      defaultShutdownTimeout,
 	}
@@ -178,6 +202,13 @@ func configFromEnv(getenv func(string) string) (config, error) {
 			return config{}, errors.New("GITRDONE_SHUTDOWN_TIMEOUT must be greater than zero")
 		}
 		cfg.shutdownTimeout = timeout
+	}
+	if raw := strings.TrimSpace(getenv("SENTRY_TRACES_SAMPLE_RATE")); raw != "" {
+		rate, err := strconv.ParseFloat(raw, 64)
+		if err != nil || rate < 0 || rate > 1 {
+			return config{}, errors.New("SENTRY_TRACES_SAMPLE_RATE must be a number between 0 and 1")
+		}
+		cfg.sentryTracesSampleRate = rate
 	}
 	if cfg.addr == "" {
 		cfg.addr = defaultAddr
@@ -192,6 +223,52 @@ func configFromEnv(getenv func(string) string) (config, error) {
 		return config{}, errors.New("GITRDONE_CONTROL_BEARER is required")
 	}
 	return cfg, nil
+}
+
+func initSentry(cfg config) (func(), error) {
+	if cfg.sentryDSN == "" {
+		return func() {}, nil
+	}
+	err := sentry.Init(sentry.ClientOptions{
+		Dsn:              cfg.sentryDSN,
+		Environment:      cfg.sentryEnvironment,
+		Release:          cfg.sentryRelease,
+		EnableTracing:    cfg.sentryTracesSampleRate > 0,
+		TracesSampleRate: cfg.sentryTracesSampleRate,
+		SendDefaultPII:   false,
+		BeforeSend:       sanitizeSentryEvent,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize Sentry: %w", err)
+	}
+	return func() {
+		sentry.Flush(defaultSentryFlushTimeout)
+	}, nil
+}
+
+func sanitizeSentryEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+	if event == nil || event.Request == nil {
+		return event
+	}
+	event.Request.Headers = nil
+	event.Request.Cookies = ""
+	event.Request.Data = ""
+	event.Request.QueryString = ""
+	if event.Request.URL == "" {
+		return event
+	}
+	parsed, err := url.Parse(event.Request.URL)
+	if err != nil {
+		urlWithoutQuery, _, ok := strings.Cut(event.Request.URL, "?")
+		if ok {
+			event.Request.URL = urlWithoutQuery
+		}
+		return event
+	}
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	event.Request.URL = parsed.String()
+	return event
 }
 
 func parseTrustedProxyPrefixes(raw string) ([]netip.Prefix, error) {

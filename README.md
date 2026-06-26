@@ -26,8 +26,18 @@ Defaults:
 | `GITRDONE_CONTROL_BEARER` | required | Bearer token for `/v1` control routes |
 | `GITRDONE_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | Comma-separated proxy IPs/CIDRs whose forwarded headers may identify the client |
 | `GITRDONE_SHUTDOWN_TIMEOUT` | `2m` | Maximum time to wait for graceful shutdown after `SIGINT` or `SIGTERM` |
+| `SENTRY_DSN` | unset | Sentry project DSN; unset disables Sentry reporting |
+| `SENTRY_ENVIRONMENT` | unset | Sentry environment name, for example `dev` or `main` |
+| `SENTRY_RELEASE` | unset | Sentry release identifier, normally the deployed Git SHA |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0` | Optional Sentry transaction sample rate from `0` to `1` |
 
 The service logs the absolute storage root on startup.
+
+The hosted env templates live in `deploy/env/`. They include the gitrdone
+Sentry DSN because DSNs are public routing identifiers, not deployment
+credentials. Sentry events are sanitized before send: request headers, cookies,
+bodies, and query strings are dropped so control and repo tokens are not
+reported.
 
 ## Access Logs
 
