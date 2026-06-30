@@ -1,0 +1,82 @@
+# gitrdone's tending intent — the pinned contract exocomp-edge converges against.
+# This is the ONLY thing gitrdone needs in its repo to be tended: how to build it,
+# how to run it, what it needs, and how to tell it's healthy. Host provisioning and
+# the one-time cutover are NOT here (they live with the rollout bundle until the
+# fleet-tier owns them).
+#
+# Hand-authored for slice zero. Values marked RECONCILE must be checked against the
+# live gitrdone host during cutover (see the rollout runbook, step 0/1).
+
+schema_version = 1
+
+[provenance]
+source = "hand"
+
+[service]
+name = "gitrdone"
+
+[source]
+repo = "sky-valley/gitrdone"
+ref = "main"
+
+[build]
+# Pure-Go (Postgres via a pure-Go driver); static binary, no toolchain fetch needed
+# beyond the pinned version.
+commands = ["CGO_ENABLED=0 go build -o gitrdone ./cmd/gitrdone"]
+toolchain_go = "1.26.3"
+artifact = "gitrdone"
+
+[run]
+# gitrdone reads all config from the environment (GITRDONE_*), so it takes no
+# arguments; the operator-owned EnvironmentFile supplies the values. The bind
+# address, run-as user, working dir, and env-file path are node facts the renderer
+# fills in — never pinned here.
+exec = "./gitrdone"
+
+# --- pass-through systemd directives the renderer doesn't model first-class ------
+# (the bounded [run.systemd] escape hatch; verbatim into the rendered unit)
+
+[run.systemd.unit]
+# The data volume must be mounted before gitrdone starts — boot-time ordering that
+# exocomp (which runs later) cannot provide. RECONCILE: this path must equal the
+# live GITRDONE_STORAGE_ROOT and live OUTSIDE exocomp's work-dir.
+RequiresMountsFor = "/var/lib/gitrdone"
+
+[run.systemd.service]
+# Graceful shutdown: must exceed GITRDONE_SHUTDOWN_TIMEOUT (default 30s) so systemd
+# does not SIGKILL gitrdone mid-drain. RECONCILE if the env raises that timeout.
+TimeoutStopSec = "120s"
+# FD headroom for a server holding many connections plus spawned git processes.
+LimitNOFILE = "65536"
+# Run under the gitrdone group (the run-as User is set by exocomp via --user).
+Group = "gitrdone"
+
+[needs]
+# The env keys gitrdone needs — the keys, never the values. Declared, not yet
+# enforced by edge; the operator's EnvironmentFile satisfies them.
+[[needs.env]]
+key = "GITRDONE_CONTROL_BEARER" # hard-required: gitrdone refuses to start without it
+required = true
+[[needs.env]]
+key = "GITRDONE_ADDR" # default 127.0.0.1:9090 is dev-only; prod must bind for real
+required = true
+[[needs.env]]
+key = "GITRDONE_BASE_URL"
+required = true
+[[needs.env]]
+key = "GITRDONE_DATABASE_URL"
+required = true
+[[needs.env]]
+key = "GITRDONE_STORAGE_ROOT" # pinned to the existing data path (preserves data)
+required = true
+[[needs.env]]
+key = "GITRDONE_TRUSTED_PROXIES"
+required = false
+[[needs.env]]
+key = "GITRDONE_SHUTDOWN_TIMEOUT" # optional; sane default 30s
+required = false
+
+[verify]
+# Post-start healthcheck (declared, not yet enforced by edge). Uses the configured
+# bind address so it stays node-agnostic.
+runtime = ["curl -fsS http://${GITRDONE_ADDR}/healthz"]
