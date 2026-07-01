@@ -43,11 +43,13 @@ exec = "./gitrdone"
 RequiresMountsFor = "/var/lib/gitrdone"
 
 [run.systemd.service]
-# Graceful shutdown: must exceed GITRDONE_SHUTDOWN_TIMEOUT (default 30s) so systemd
-# does not SIGKILL gitrdone mid-drain. RECONCILE if the env raises that timeout.
-TimeoutStopSec = "120s"
+# Graceful shutdown: must exceed GITRDONE_SHUTDOWN_TIMEOUT (2m in the deployed env)
+# so systemd does not SIGKILL gitrdone mid-drain. Matches the live dev/main unit
+# (150s = 2m30s), giving a 30s margin over the 2m app drain.
+TimeoutStopSec = "150s"
 # FD headroom for a server holding many connections plus spawned git processes.
-LimitNOFILE = "65536"
+# Matches the live deployed unit (verified on gitrdone-dev-1).
+LimitNOFILE = "524288"
 # Run under the gitrdone group (the run-as User is set by exocomp via --user).
 Group = "gitrdone"
 
