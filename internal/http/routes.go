@@ -15,6 +15,8 @@ type Handlers struct {
 	ListRepoTokens  http.Handler
 	RevokeRepoToken http.Handler
 	GitSmartHTTP    http.Handler
+	GitShowDiff     http.Handler
+	GitCompareDiff  http.Handler
 }
 
 func NewMux(h Handlers) *http.ServeMux {
@@ -47,6 +49,11 @@ func NewMux(h Handlers) *http.ServeMux {
 	gitSmartHTTP := gitRepoRoute(h.GitSmartHTTP)
 	mux.Handle("GET /git/repos/{repoGitID}/{gitPath...}", gitSmartHTTP)
 	mux.Handle("POST /git/repos/{repoGitID}/{gitPath...}", gitSmartHTTP)
+
+	// More specific than the {gitPath...} catch-all above, so Go's ServeMux
+	// routes these here rather than into the git smart-HTTP transport.
+	mux.Handle("GET /git/repos/{repoGitID}/show/{spec}", gitRepoRoute(h.GitShowDiff))
+	mux.Handle("GET /git/repos/{repoGitID}/compare/{spec}", gitRepoRoute(h.GitCompareDiff))
 
 	return mux
 }

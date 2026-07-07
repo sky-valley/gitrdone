@@ -65,6 +65,8 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 				requireBodyIncludes(t, body, "GET /v1/repos/{repoID}/tokens")
 				requireBodyIncludes(t, body, "POST /v1/repos/{repoID}/tokens/{tokenID}/revoke")
 				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/info/refs?service=git-upload-pack")
+				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/show/{sha}.diff")
+				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/compare/{base}..{head}.diff")
 				requireBodyIncludes(t, body, "## Reliable token creation")
 				requireBodyIncludes(t, body, "Idempotency-Key: differ:import:imp_123:source-read-token")
 				requireBodyIncludes(t, body, "Reuse the same key only for the same repo, scope, subject, and TTL.")

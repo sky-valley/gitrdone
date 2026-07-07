@@ -123,9 +123,9 @@ Token scopes:
 
 | Scope | Allows |
 | --- | --- |
-| `read` | clone, fetch, pull |
+| `read` | clone, fetch, pull, read diff endpoints |
 | `write` | push |
-| `readwrite` | clone, fetch, pull, push |
+| `readwrite` | clone, fetch, pull, push, read diff endpoints |
 
 Create-token responses include the raw token. List and revoke endpoints return metadata only.
 
@@ -171,6 +171,22 @@ git -C worktree -c http.extraHeader="Authorization: Bearer ${REPO_TOKEN}" \
 ```
 
 Normal Git clients can also use Basic auth with username `x-access-token` and the repo token as the password. Do not persist repo tokens in remote URLs.
+
+Read-scoped service callers can fetch patch text without cloning:
+
+```bash
+curl -sS "${GIT_URL}/show/${SHA}.diff" \
+  -H "Authorization: Bearer ${REPO_TOKEN}"
+
+curl -sS "${GIT_URL}/compare/${BASE}..${HEAD}.diff" \
+  -H "Authorization: Bearer ${REPO_TOKEN}"
+```
+
+`show/{sha}.diff` returns a single commit patch. `compare/{base}..{head}.diff`
+returns an endpoint diff, and `compare/{base}...{head}.diff` uses Git's
+merge-base comparison. Revision values must be lowercase hex object IDs, full
+or abbreviated from 7 to 64 characters. Diff responses are capped at 8 MiB;
+larger diffs return `413 Request Entity Too Large`.
 
 ## Public Agent Docs
 

@@ -65,9 +65,9 @@ Control API endpoints require an internal control bearer token. Git endpoints re
 
 Repo tokens are capability grants, not user identity sessions. The token subject is audit context supplied by the caller. Supported repo token scopes are:
 
-- read: clone, fetch, pull
+- read: clone, fetch, pull, read diff endpoints
 - write: push
-- readwrite: clone, fetch, pull, push
+- readwrite: clone, fetch, pull, push, read diff endpoints
 
 Normal Git clients should use Basic auth with username x-access-token and a repo token as the password. Do not persist repo tokens in remote URLs. Bearer auth is also accepted by Git routes for service callers.
 
@@ -125,6 +125,14 @@ Git smart HTTP for normal Git clients:
 - GET /git/repos/{repoID}.git/info/refs?service=git-receive-pack
 - POST /git/repos/{repoID}.git/git-receive-pack
 
+Read-only diff endpoints for service callers:
+
+- GET /git/repos/{repoID}.git/show/{sha}.diff
+- GET /git/repos/{repoID}.git/compare/{base}..{head}.diff
+- GET /git/repos/{repoID}.git/compare/{base}...{head}.diff
+
+Diff revisions must be lowercase hex object IDs, full or abbreviated from 7 to 64 characters. Diff responses larger than 8 MiB return 413 Request Entity Too Large.
+
 ## Git command use
 
 Prefer ordinary Git commands over handcrafted protocol requests:
@@ -177,6 +185,7 @@ List and revoke repo tokens with the control bearer token; token values are retu
 - [Repo tokens](%[1]s/v1/repos/{repoID}/tokens): POST to create; GET to list metadata with control bearer token.
 - [Revoke repo token](%[1]s/v1/repos/{repoID}/tokens/{tokenID}/revoke): POST with control bearer token.
 - [Git smart HTTP](%[1]s/git/repos/{repoID}.git): Use normal Git commands with repo-scoped tokens.
+- [Git diff endpoints](%[1]s/git/repos/{repoID}.git/show/{sha}.diff): Fetch read-scoped patch text without cloning.
 
 ## Optional
 

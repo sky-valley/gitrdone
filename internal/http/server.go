@@ -38,6 +38,8 @@ func NewServerWithStores(config Config, repos repoStore, idempotency idempotency
 		ListRepoTokens:  control(listRepoTokensHandler(repos)),
 		RevokeRepoToken: control(revokeRepoTokenHandler(repos)),
 		GitSmartHTTP:    gitSmartHTTPHandler(repos, execGitHTTPBackend{}),
+		GitShowDiff:     gitDiffHandler(repos, execGitDiffBackend{}, gitDiffShow),
+		GitCompareDiff:  gitDiffHandler(repos, execGitDiffBackend{}, gitDiffCompare),
 	})
 	return accessLog(config.AccessLog, config.TrustedProxyPrefixes, mux)
 }
