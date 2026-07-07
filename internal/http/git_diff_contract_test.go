@@ -26,6 +26,11 @@ func TestGitDiffRealGitCommands(t *testing.T) {
 	requireGitSuccess(t, "push head", "-C", worktree, "push", "origin", "main")
 	head := gitRevParse(t, worktree, "HEAD")
 
+	const tagMessage = "tag metadata should not be in a patch response"
+	requireGitSuccess(t, "tag head", "-C", worktree, "tag", "-a", "v1", "-m", tagMessage)
+	tagObject := gitRevParse(t, worktree, "v1^{tag}")
+	requireGitSuccess(t, "push tag", "-C", worktree, "push", "origin", "refs/tags/v1")
+
 	t.Run("read token gets a single commit diff via show", func(t *testing.T) {
 		status, body := getGitDiff(t, fixture, "show/"+head+".diff", readToken.Token)
 		if status != http.StatusOK {
@@ -40,6 +45,38 @@ func TestGitDiffRealGitCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("read token gets patch only when show target is an annotated tag object", func(t *testing.T) {
+		status, body := getGitDiff(t, fixture, "show/"+tagObject+".diff", readToken.Token)
+		if status != http.StatusOK {
+			t.Fatalf("status = %d, want 200\n%s", status, body)
+		}
+		assertUnifiedDiff(t, body)
+		for _, forbidden := range []string{"tag v1", "Tagger:", tagMessage, "update readme"} {
+			if strings.Contains(body, forbidden) {
+				t.Fatalf("show diff leaked %q through annotated tag object:\n%s", forbidden, body)
+			}
+		}
+	})
+
+	requireGitSuccess(t, "create feature branch", "-C", worktree, "checkout", "-b", "feature", base)
+	writeGitFile(t, worktree, "feature.txt", "feature branch\n")
+	requireGitSuccess(t, "stage feature", "-C", worktree, "add", "feature.txt")
+	requireGitSuccess(t, "commit feature", "-C", worktree, "commit", "-m", "feature branch")
+	requireGitSuccess(t, "return to main", "-C", worktree, "checkout", "main")
+	requireGitSuccess(t, "merge feature", "-C", worktree, "merge", "--no-ff", "feature", "-m", "merge feature")
+	requireGitSuccess(t, "push merge", "-C", worktree, "push", "origin", "main")
+	mergeCommit := gitRevParse(t, worktree, "HEAD")
+
+	t.Run("read token gets a first parent patch for a merge commit via show", func(t *testing.T) {
+		status, body := getGitDiff(t, fixture, "show/"+mergeCommit+".diff", readToken.Token)
+		if status != http.StatusOK {
+			t.Fatalf("status = %d, want 200\n%s", status, body)
+		}
+		if !strings.Contains(body, "diff --git a/feature.txt b/feature.txt") || !strings.Contains(body, "+feature branch") {
+			t.Fatalf("merge show diff missing first parent patch:\n%s", body)
+		}
+	})
+
 	t.Run("read token gets an endpoint diff via compare", func(t *testing.T) {
 		status, body := getGitDiff(t, fixture, "compare/"+base+".."+head+".diff", readToken.Token)
 		if status != http.StatusOK {
@@ -48,6 +85,24 @@ func TestGitDiffRealGitCommands(t *testing.T) {
 		assertUnifiedDiff(t, body)
 		if !strings.Contains(body, "-first version") || !strings.Contains(body, "+second version") {
 			t.Fatalf("compare diff missing the expected hunk:\n%s", body)
+		}
+	})
+
+	requireGitSuccess(t, "create unrelated orphan branch", "-C", worktree, "checkout", "--orphan", "unrelated")
+	requireGitSuccess(t, "remove orphan branch files", "-C", worktree, "rm", "-rf", ".")
+	writeGitFile(t, worktree, "unrelated.txt", "unrelated history\n")
+	requireGitSuccess(t, "stage unrelated", "-C", worktree, "add", "unrelated.txt")
+	requireGitSuccess(t, "commit unrelated", "-C", worktree, "commit", "-m", "unrelated history")
+	requireGitSuccess(t, "push unrelated", "-C", worktree, "push", "origin", "unrelated")
+	unrelated := gitRevParse(t, worktree, "HEAD")
+
+	t.Run("triple dot compare without a merge base is a caller conflict", func(t *testing.T) {
+		status, body := getGitDiff(t, fixture, "compare/"+base+"..."+unrelated+".diff", readToken.Token)
+		if status != http.StatusConflict {
+			t.Fatalf("status = %d, want 409\n%s", status, body)
+		}
+		if !strings.Contains(body, "diff revisions do not share a merge base") {
+			t.Fatalf("body = %q, want no merge base message", body)
 		}
 	})
 

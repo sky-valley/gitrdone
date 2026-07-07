@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -181,6 +183,56 @@ func TestGitDiffHandlerBoundary(t *testing.T) {
 			t.Fatal("backend was not called")
 		}
 	})
+
+	t.Run("git startup failure becomes an internal server error", func(t *testing.T) {
+		access := &recordingGitAccessAuthorizer{
+			grant: gitAccessGrant{RepoID: rawRepoID, RepoPath: "/tmp/repos/" + rawRepoID + ".git"},
+		}
+		backend := execGitDiffBackend{gitPath: filepath.Join(t.TempDir(), "missing-git")}
+		handler := gitDiffHandler(access, backend, gitDiffShow)
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, newRequest(sha+".diff"))
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+		}
+	})
+}
+
+func TestExecGitDiffBackendRejectsOversizedDiff(t *testing.T) {
+	const rawRepoID = "00000000-0000-4000-8000-000000000001"
+	const pathRepoID = "repo_" + rawRepoID
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+
+	marker := filepath.Join(t.TempDir(), "finished")
+	fakeGit := writeFakeGit(t, `#!/bin/sh
+case "$*" in
+  *" rev-parse --verify "*) printf '0123456789abcdef0123456789abcdef01234567\n'; exit 0 ;;
+esac
+yes x | head -c 8388609
+sleep 5
+printf finished > "`+marker+`"
+`)
+	access := &recordingGitAccessAuthorizer{
+		grant: gitAccessGrant{RepoID: rawRepoID, RepoPath: "/tmp/repos/" + rawRepoID + ".git"},
+	}
+	backend := execGitDiffBackend{gitPath: fakeGit}
+	handler := gitDiffHandler(access, backend, gitDiffShow)
+	req := httptest.NewRequest(http.MethodGet, "/git/repos/"+pathRepoID+".git/show/"+sha+".diff", nil)
+	req.SetPathValue("repoID", pathRepoID)
+	req.SetPathValue("spec", sha+".diff")
+	req.Header.Set("Authorization", "Bearer gtd_read_token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("fake git was not stopped after the diff cap; marker stat error = %v", err)
+	}
 }
 
 func TestGitDiffRoutesUseCanonicalRepoID(t *testing.T) {
@@ -258,4 +310,13 @@ func (backend *recordingGitDiffBackend) ServeGitDiff(w http.ResponseWriter, r *h
 	}
 	w.WriteHeader(backend.status)
 	return nil
+}
+
+func writeFakeGit(t *testing.T, script string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	return path
 }
