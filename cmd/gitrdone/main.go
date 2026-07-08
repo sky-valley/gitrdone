@@ -20,7 +20,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	sentryhttp "github.com/getsentry/sentry-go/http"
 
-	httpapi "skyvalley.ac/m/v2/internal/http"
+	httpapi "github.com/sky-valley/gitrdone/internal/http"
 )
 
 const (
@@ -28,11 +28,12 @@ const (
 	defaultBaseURL     = "http://localhost:8080"
 	defaultStorageRoot = ".storage"
 
-	defaultReadHeaderTimeout = 5 * time.Second
-	defaultIdleTimeout       = 60 * time.Second
-	defaultMaxHeaderBytes    = 32 * 1024
-	defaultShutdownTimeout   = 2 * time.Minute
+	defaultReadHeaderTimeout  = 5 * time.Second
+	defaultIdleTimeout        = 60 * time.Second
+	defaultMaxHeaderBytes     = 32 * 1024
+	defaultShutdownTimeout    = 2 * time.Minute
 	defaultSentryFlushTimeout = 2 * time.Second
+	defaultMaxLFSObjectBytes  = httpapi.DefaultMaxLFSObjectBytes
 )
 
 var defaultTrustedProxyPrefixes = []netip.Prefix{
@@ -46,6 +47,7 @@ type config struct {
 	controlBearer          string
 	storageRoot            string
 	databaseURL            string
+	maxLFSObjectBytes      int64
 	trustedProxyPrefixes   []netip.Prefix
 	shutdownTimeout        time.Duration
 	accessLog              io.Writer
@@ -137,6 +139,7 @@ func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error,
 		BaseURL:              cfg.baseURL,
 		ControlBearer:        cfg.controlBearer,
 		StorageRoot:          cfg.storageRoot,
+		MaxLFSObjectBytes:    cfg.maxLFSObjectBytes,
 		AccessLog:            cfg.accessLog,
 		TrustedProxyPrefixes: cfg.trustedProxyPrefixes,
 	})
@@ -148,6 +151,7 @@ func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error,
 			BaseURL:              cfg.baseURL,
 			ControlBearer:        cfg.controlBearer,
 			StorageRoot:          cfg.storageRoot,
+			MaxLFSObjectBytes:    cfg.maxLFSObjectBytes,
 			AccessLog:            cfg.accessLog,
 			TrustedProxyPrefixes: cfg.trustedProxyPrefixes,
 		}, cfg.databaseURL)
@@ -192,6 +196,7 @@ func configFromEnv(getenv func(string) string) (config, error) {
 		sentryRelease:        strings.TrimSpace(getenv("SENTRY_RELEASE")),
 		trustedProxyPrefixes: trustedProxyPrefixes,
 		shutdownTimeout:      defaultShutdownTimeout,
+		maxLFSObjectBytes:    defaultMaxLFSObjectBytes,
 	}
 	if raw := strings.TrimSpace(getenv("GITRDONE_SHUTDOWN_TIMEOUT")); raw != "" {
 		timeout, err := time.ParseDuration(raw)
@@ -209,6 +214,13 @@ func configFromEnv(getenv func(string) string) (config, error) {
 			return config{}, errors.New("SENTRY_TRACES_SAMPLE_RATE must be a number between 0 and 1")
 		}
 		cfg.sentryTracesSampleRate = rate
+	}
+	if raw := strings.TrimSpace(getenv("GITRDONE_MAX_LFS_OBJECT_BYTES")); raw != "" {
+		maxBytes, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || maxBytes <= 0 {
+			return config{}, errors.New("GITRDONE_MAX_LFS_OBJECT_BYTES must be a positive integer")
+		}
+		cfg.maxLFSObjectBytes = maxBytes
 	}
 	if cfg.addr == "" {
 		cfg.addr = defaultAddr

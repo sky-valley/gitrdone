@@ -2,12 +2,13 @@
 
 Authenticated Git smart HTTP with a small control API for repo-backed workflows.
 
-gitrdone is intentionally narrow: it creates backing Git repos, mints repo-scoped access tokens, and serves those repos over normal Git HTTP routes. Higher-level product concepts belong in the caller.
+gitrdone is intentionally narrow: it creates backing Git repos, mints repo-scoped access tokens, and serves those repos over normal Git HTTP routes, including the Git LFS Batch and Basic Transfer APIs. Higher-level product concepts belong in the caller.
 
 ## Requirements
 
 - Go 1.26.3 or newer
 - `git` available on `PATH`
+- `git-lfs` available on `PATH` for the real Git LFS integration test
 
 ## Run Locally
 
@@ -22,6 +23,7 @@ Defaults:
 | `GITRDONE_ADDR` | `:8080` | HTTP listen address |
 | `GITRDONE_BASE_URL` | `http://localhost:8080` | Base URL used in API responses and docs |
 | `GITRDONE_STORAGE_ROOT` | `.storage` | Filesystem root for bare Git repos |
+| `GITRDONE_MAX_LFS_OBJECT_BYTES` | `5368709120` | Maximum accepted Git LFS object upload size in bytes |
 | `GITRDONE_DATABASE_URL` | unset | Postgres URL for durable control metadata |
 | `GITRDONE_CONTROL_BEARER` | required | Bearer token for `/v1` control routes |
 | `GITRDONE_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | Comma-separated proxy IPs/CIDRs whose forwarded headers may identify the client |
@@ -33,11 +35,9 @@ Defaults:
 
 The service logs the absolute storage root on startup.
 
-The hosted env templates live in `deploy/env/`. They include the gitrdone
-Sentry DSN because DSNs are public routing identifiers, not deployment
-credentials. Sentry events are sanitized before send: request headers, cookies,
-bodies, and query strings are dropped so control and repo tokens are not
-reported.
+The env templates live in `deploy/env/` and use public-safe placeholder values.
+Sentry events are sanitized before send: request headers, cookies, bodies, and
+query strings are dropped so control and repo tokens are not reported.
 
 ## Access Logs
 
@@ -77,6 +77,7 @@ server graceful shutdown semantics.
 ## Storage Model
 
 - Bare Git repos are stored under `<storage-root>/repos/{uuid}.git`.
+- Git LFS object bytes are stored outside the bare repo under `<storage-root>/lfs/{uuid}/objects/...`.
 - Without `GITRDONE_DATABASE_URL`, control metadata and repo tokens are kept in memory.
 - With `GITRDONE_DATABASE_URL`, repo metadata, token hashes, token lifecycle timestamps, and idempotency records are stored in Postgres.
 - Bare repos still need durable filesystem storage even when Postgres is enabled.
@@ -95,7 +96,7 @@ Create a repo:
 curl -sS -X POST http://localhost:8080/v1/repos \
   -H "Authorization: Bearer dev-control-token" \
   -H "Content-Type: application/json" \
-  -d '{"namespace":"differ","name":"example","defaultBranch":"main"}'
+  -d '{"namespace":"acme","name":"example","defaultBranch":"main"}'
 ```
 
 Response shape:
@@ -103,7 +104,7 @@ Response shape:
 ```json
 {
   "id": "repo_00000000-0000-4000-8000-000000000000",
-  "repo": "differ/example",
+  "repo": "acme/example",
   "gitUrl": "http://localhost:8080/git/repos/repo_00000000-0000-4000-8000-000000000000.git",
   "defaultBranch": "main"
 }
@@ -115,17 +116,17 @@ Create a repo token:
 curl -sS -X POST http://localhost:8080/v1/repos/${REPO_ID}/tokens \
   -H "Authorization: Bearer dev-control-token" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: differ:import:imp_123:source-read-token" \
-  -d '{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-import:imp_123"}'
+  -H "Idempotency-Key: import:imp_123:source-read-token" \
+  -d '{"scope":"readwrite","ttlSeconds":3600,"subject":"import:imp_123"}'
 ```
 
 Token scopes:
 
 | Scope | Allows |
 | --- | --- |
-| `read` | clone, fetch, pull, read diff endpoints |
-| `write` | push |
-| `readwrite` | clone, fetch, pull, push, read diff endpoints |
+| `read` | clone, fetch, pull, Git LFS downloads, read diff endpoints |
+| `write` | push, Git LFS uploads |
+| `readwrite` | clone, fetch, pull, push, Git LFS upload/download, read diff endpoints |
 
 Create-token responses include the raw token. List and revoke endpoints return metadata only.
 
@@ -172,6 +173,8 @@ git -C worktree -c http.extraHeader="Authorization: Bearer ${REPO_TOKEN}" \
 
 Normal Git clients can also use Basic auth with username `x-access-token` and the repo token as the password. Do not persist repo tokens in remote URLs.
 
+Git LFS repositories use the same canonical Git remote and repo tokens. gitrdone supports the LFS Batch API, Basic Transfer upload/download, and lock verification. Lock verification returns an empty conflict set; gitrdone does not provide collaborative LFS locking.
+
 Read-scoped service callers can fetch patch text without cloning:
 
 ```bash
@@ -213,6 +216,15 @@ GET /healthz
 
 `/healthz` returns `204 No Content` when the service is up.
 
+Git LFS endpoints for normal `git-lfs` clients:
+
+```text
+POST /git/repos/{repoID}.git/info/lfs/objects/batch
+PUT  /git/repos/{repoID}.git/info/lfs/objects/{oid}
+GET  /git/repos/{repoID}.git/info/lfs/objects/{oid}
+POST /git/repos/{repoID}.git/info/lfs/locks/verify
+```
+
 ## Test
 
 ```bash
@@ -220,6 +232,10 @@ go test ./...
 go vet ./...
 go test -race ./...
 ```
+
+`TestGitLFSRealGitCommands` requires `git-lfs`. Set
+`GITRDONE_SKIP_GIT_LFS_CONTRACT_TEST=1` only when intentionally running the
+suite in an environment that cannot install the real client.
 
 Postgres contract test:
 

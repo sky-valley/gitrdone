@@ -1,4 +1,4 @@
-module skyvalley.ac/m/v2
+module github.com/sky-valley/gitrdone
 
 go 1.26.3
 

@@ -46,9 +46,9 @@ func newAgentDocs(baseURL string) agentDocs {
 
 	agents := fmt.Sprintf(`# gitrdone Agent Guide
 
-> gitrdone is an authenticated Git smart HTTP service with a small control API for creating backing Git repos and repo-scoped access tokens.
+> gitrdone is an authenticated Git smart HTTP and Git LFS service with a small control API for creating backing Git repos and repo-scoped access tokens.
 
-Use this guide when acting as an automated agent against gitrdone. gitrdone is intentionally lower-level than Differ: it serves Git repos, tokens, and Git smart HTTP. Product concepts such as stems, divergences, adaptations, and app ownership belong in Differ.
+Use this guide when acting as an automated agent against gitrdone. gitrdone is intentionally narrow: it serves Git repos, tokens, Git smart HTTP, and Git LFS. Higher-level product concepts belong in the caller.
 
 ## Discovery
 
@@ -65,9 +65,9 @@ Control API endpoints require an internal control bearer token. Git endpoints re
 
 Repo tokens are capability grants, not user identity sessions. The token subject is audit context supplied by the caller. Supported repo token scopes are:
 
-- read: clone, fetch, pull, read diff endpoints
-- write: push
-- readwrite: clone, fetch, pull, push, read diff endpoints
+- read: clone, fetch, pull, Git LFS downloads, read diff endpoints
+- write: push, Git LFS uploads
+- readwrite: clone, fetch, pull, push, Git LFS upload/download, read diff endpoints
 
 Normal Git clients should use Basic auth with username x-access-token and a repo token as the password. Do not persist repo tokens in remote URLs. Bearer auth is also accepted by Git routes for service callers.
 
@@ -78,9 +78,9 @@ For POST /v1/repos/{repoID}/tokens, include Idempotency-Key when retrying or whe
 Use a key derived from the logical operation, not from a single HTTP attempt:
 
 `+"```http"+`
-Idempotency-Key: differ:import:imp_123:source-read-token
-Idempotency-Key: differ:divergence:div_456:push-token
-Idempotency-Key: differ:adaptation-run:run_789:stem-write-token
+Idempotency-Key: import:imp_123:source-read-token
+Idempotency-Key: workflow:run_456:push-token
+Idempotency-Key: release:rel_789:write-token
 `+"```"+`
 
 Reuse the same key only for the same repo, scope, subject, and TTL. If the same key is reused for a different token request, gitrdone returns 409 Conflict; do not blindly retry that conflict.
@@ -109,7 +109,7 @@ Public discovery:
 - GET /sitemap.xml
 - GET /healthz
 
-Control API for trusted Differ services:
+Control API for trusted services:
 
 - POST /v1/repos
 - GET /v1/repos/{repoID}
@@ -124,6 +124,15 @@ Git smart HTTP for normal Git clients:
 - POST /git/repos/{repoID}.git/git-upload-pack
 - GET /git/repos/{repoID}.git/info/refs?service=git-receive-pack
 - POST /git/repos/{repoID}.git/git-receive-pack
+
+Git LFS for normal git-lfs clients:
+
+- POST /git/repos/{repoID}.git/info/lfs/objects/batch
+- PUT /git/repos/{repoID}.git/info/lfs/objects/{oid}
+- GET /git/repos/{repoID}.git/info/lfs/objects/{oid}
+- POST /git/repos/{repoID}.git/info/lfs/locks/verify
+
+Git LFS lock verification returns an empty conflict set. gitrdone does not provide collaborative LFS locking.
 
 Read-only diff endpoints for service callers:
 
@@ -155,16 +164,16 @@ repoID is the external control ID, for example repo_00000000-0000-4000-8000-0000
 ## Do not hit
 
 - Do not use namespace/name Git routes. They are not canonical.
-- Do not scrape storage paths. Bare repo paths are internal implementation details.
+- Do not scrape storage paths. Bare repo paths and LFS object paths are internal implementation details.
 - Do not assume anonymous repo access. Git access requires repo tokens.
-- Do not treat Differ concepts as gitrdone concepts. gitrdone does not know stems, divergences, adaptations, apps, or logged-in product users.
+- Do not treat caller product concepts as gitrdone concepts. gitrdone does not know application workflows, tenants, or logged-in product users.
 `, baseURL)
 
 	llms := fmt.Sprintf(`# gitrdone
 
-> gitrdone is an authenticated Git smart HTTP service with a small control API for creating backing Git repos and repo-scoped access tokens.
+> gitrdone is an authenticated Git smart HTTP and Git LFS service with a small control API for creating backing Git repos and repo-scoped access tokens.
 
-gitrdone is intended to be used by Differ services and trusted agents as a Git backend. Use canonical repo IDs, not namespace/name, as the Git identity. Public discovery files are safe to scrape. Control and Git operations require the appropriate tokens.
+gitrdone is intended to be used by trusted services and automation agents as a Git backend. Use canonical repo IDs, not namespace/name, as the Git identity. Public discovery files are safe to scrape. Control, Git, and Git LFS operations require the appropriate tokens.
 
 For retriable automation, include Idempotency-Key on token creation and derive it from the stable logical operation.
 
@@ -184,7 +193,7 @@ List and revoke repo tokens with the control bearer token; token values are retu
 - [Create repo](%[1]s/v1/repos): POST with control bearer token.
 - [Repo tokens](%[1]s/v1/repos/{repoID}/tokens): POST to create; GET to list metadata with control bearer token.
 - [Revoke repo token](%[1]s/v1/repos/{repoID}/tokens/{tokenID}/revoke): POST with control bearer token.
-- [Git smart HTTP](%[1]s/git/repos/{repoID}.git): Use normal Git commands with repo-scoped tokens.
+- [Git smart HTTP and LFS](%[1]s/git/repos/{repoID}.git): Use normal Git commands with repo-scoped tokens.
 - [Git diff endpoints](%[1]s/git/repos/{repoID}.git/show/{sha}.diff): Fetch read-scoped patch text without cloning.
 
 ## Optional
@@ -195,7 +204,7 @@ List and revoke repo tokens with the control bearer token; token values are retu
 
 	root := fmt.Sprintf(`# gitrdone
 
-gitrdone serves authenticated Git smart HTTP for repo-ID-addressed backing repos.
+gitrdone serves authenticated Git smart HTTP and Git LFS for repo-ID-addressed backing repos.
 
 Agent entrypoints:
 

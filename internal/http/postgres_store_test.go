@@ -75,7 +75,7 @@ func TestPostgresRepoStoreContract(t *testing.T) {
 	token, err := store.CreateRepoToken(ctx, createRepoTokenInput{
 		RepoID:     repo.ID,
 		Scope:      "read",
-		Subject:    "differ-reader-job",
+		Subject:    "reader-job",
 		TTLSeconds: 3600,
 	})
 	if err != nil {
@@ -94,8 +94,8 @@ func TestPostgresRepoStoreContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if grant.Subject != "differ-reader-job" {
-		t.Fatalf("subject = %q, want differ-reader-job", grant.Subject)
+	if grant.Subject != "reader-job" {
+		t.Fatalf("subject = %q, want reader-job", grant.Subject)
 	}
 
 	tokens, err := store.ListRepoTokens(ctx, listRepoTokensInput{RepoID: repo.ID})
@@ -198,7 +198,7 @@ func TestPostgresTokenIdempotencyRollsBackTokenWhenReplayRecordFails(t *testing.
 		token, err := store.CreateRepoToken(createCtx, createRepoTokenInput{
 			RepoID:     repo.ID,
 			Scope:      "read",
-			Subject:    "differ-reader-job",
+			Subject:    "reader-job",
 			TTLSeconds: 3600,
 		})
 		if err != nil {

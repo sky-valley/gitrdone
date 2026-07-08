@@ -11,14 +11,14 @@ import (
 	"strings"
 	"testing"
 
-	httpapi "skyvalley.ac/m/v2/internal/http"
+	httpapi "github.com/sky-valley/gitrdone/internal/http"
 )
 
 func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 	t.Run("readwrite token can push and read token can clone and fetch", func(t *testing.T) {
 		fixture := newGitSmartHTTPFixture(t, "readwrite")
-		readwriteToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "readwrite", "differ-bootstrap-job")
-		readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "differ-reader-job")
+		readwriteToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "readwrite", "bootstrap-job")
+		readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "reader-job")
 
 		worktree := newGitWorktree(t, "README.md", "first version\n")
 		pushURL := fixture.tokenizedGitURL(readwriteToken.Token)
@@ -40,7 +40,7 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 
 	t.Run("write token can push without read scope", func(t *testing.T) {
 		fixture := newGitSmartHTTPFixture(t, "write")
-		writeToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "write", "differ-writer-job")
+		writeToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "write", "writer-job")
 
 		worktree := newGitWorktree(t, "write.txt", "write scope\n")
 		requireGitSuccess(t, "push with write token", "-C", worktree, "remote", "add", "origin", fixture.tokenizedGitURL(writeToken.Token))
@@ -49,7 +49,7 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 
 	t.Run("read token cannot push", func(t *testing.T) {
 		fixture := newGitSmartHTTPFixture(t, "read-denied")
-		readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "differ-reader-job")
+		readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "reader-job")
 
 		worktree := newGitWorktree(t, "denied.txt", "read-only\n")
 		requireGitSuccess(t, "add remote with read token", "-C", worktree, "remote", "add", "origin", fixture.tokenizedGitURL(readToken.Token))
@@ -58,7 +58,7 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 
 	t.Run("write token cannot clone", func(t *testing.T) {
 		fixture := newGitSmartHTTPFixture(t, "write-denied")
-		writeToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "write", "differ-writer-job")
+		writeToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "write", "writer-job")
 
 		requireGitFailure(t, "clone with write token", "clone", fixture.tokenizedGitURL(writeToken.Token), filepath.Join(t.TempDir(), "clone"))
 	})
@@ -72,7 +72,7 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 	t.Run("token for one repo cannot read another repo", func(t *testing.T) {
 		fixture := newGitSmartHTTPFixture(t, "wrong-repo")
 		otherRepo := createRepoFixture(t, fixture.handler, "wrong-repo-other")
-		readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "differ-reader-job")
+		readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "reader-job")
 
 		requireGitFailure(t, "clone with token from another repo", "clone", fixture.tokenizedGitURLForRepo(otherRepo.ID, readToken.Token), filepath.Join(t.TempDir(), "clone"))
 	})

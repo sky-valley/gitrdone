@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	httpapi "skyvalley.ac/m/v2/internal/http"
+	httpapi "github.com/sky-valley/gitrdone/internal/http"
 )
 
 func TestGitSmartHTTPPreflightContract(t *testing.T) {
 	t.Run("authorized read reaches the git backend", func(t *testing.T) {
 		server := newGitPreflightServer(t)
 		repo := createRepoFixture(t, server, "git-preflight-read")
-		token := createRepoTokenFixture(t, server, repo.ID, "read", "differ-reader-job")
+		token := createRepoTokenFixture(t, server, repo.ID, "read", "reader-job")
 
 		res, body := request(t, server, http.MethodGet, "/git/repos/"+repo.ID+".git/info/refs?service=git-upload-pack", bearer(token.Token), "", "")
 
@@ -29,7 +29,7 @@ func TestGitSmartHTTPPreflightContract(t *testing.T) {
 	t.Run("authorized write reaches the git backend", func(t *testing.T) {
 		server := newGitPreflightServer(t)
 		repo := createRepoFixture(t, server, "git-preflight-write")
-		token := createRepoTokenFixture(t, server, repo.ID, "write", "differ-writer-job")
+		token := createRepoTokenFixture(t, server, repo.ID, "write", "writer-job")
 
 		res, body := request(t, server, http.MethodGet, "/git/repos/"+repo.ID+".git/info/refs?service=git-receive-pack", bearer(token.Token), "", "")
 
@@ -90,7 +90,7 @@ func TestGitSmartHTTPPreflightContract(t *testing.T) {
 		server := newGitPreflightServer(t)
 		repo := createRepoFixture(t, server, "git-preflight-one")
 		otherRepo := createRepoFixture(t, server, "git-preflight-two")
-		token := createRepoTokenFixture(t, server, repo.ID, "read", "differ-reader-job")
+		token := createRepoTokenFixture(t, server, repo.ID, "read", "reader-job")
 
 		res, body := request(t, server, http.MethodGet, "/git/repos/"+otherRepo.ID+".git/info/refs?service=git-upload-pack", bearer(token.Token), "", "")
 
@@ -100,7 +100,7 @@ func TestGitSmartHTTPPreflightContract(t *testing.T) {
 	t.Run("read token cannot write", func(t *testing.T) {
 		server := newGitPreflightServer(t)
 		repo := createRepoFixture(t, server, "git-preflight-read-only")
-		token := createRepoTokenFixture(t, server, repo.ID, "read", "differ-reader-job")
+		token := createRepoTokenFixture(t, server, repo.ID, "read", "reader-job")
 
 		res, body := request(t, server, http.MethodGet, "/git/repos/"+repo.ID+".git/info/refs?service=git-receive-pack", bearer(token.Token), "", "")
 
@@ -110,7 +110,7 @@ func TestGitSmartHTTPPreflightContract(t *testing.T) {
 	t.Run("write token cannot read", func(t *testing.T) {
 		server := newGitPreflightServer(t)
 		repo := createRepoFixture(t, server, "git-preflight-write-only")
-		token := createRepoTokenFixture(t, server, repo.ID, "write", "differ-writer-job")
+		token := createRepoTokenFixture(t, server, repo.ID, "write", "writer-job")
 
 		res, body := request(t, server, http.MethodGet, "/git/repos/"+repo.ID+".git/info/refs?service=git-upload-pack", bearer(token.Token), "", "")
 
@@ -120,7 +120,7 @@ func TestGitSmartHTTPPreflightContract(t *testing.T) {
 	t.Run("archived repo rejects git access", func(t *testing.T) {
 		server := newGitPreflightServer(t)
 		repo := createRepoFixture(t, server, "git-preflight-archived")
-		token := createRepoTokenFixture(t, server, repo.ID, "read", "differ-reader-job")
+		token := createRepoTokenFixture(t, server, repo.ID, "read", "reader-job")
 		res, body := request(t, server, http.MethodPost, "/v1/repos/"+repo.ID+"/archive", controlAuthorization, "", "")
 		requireStatus(t, res, body, http.StatusOK)
 

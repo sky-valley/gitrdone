@@ -13,7 +13,7 @@ func TestMemoryIdempotencyStoreReplaysSameRequest(t *testing.T) {
 	})
 	input := idempotencyInput{
 		Scope:       "POST /v1/repos/repo_00000000-0000-4000-8000-000000000001/tokens",
-		Key:         "differ:import:imp_123:source-read-token",
+		Key:         "import:imp_123:source-read-token",
 		RequestHash: "request-a",
 	}
 	createCalls := 0
@@ -54,7 +54,7 @@ func TestMemoryIdempotencyStoreConflictsOnChangedRequest(t *testing.T) {
 	store := newMemoryIdempotencyStore(time.Now)
 	input := idempotencyInput{
 		Scope:       "POST /v1/repos/repo_00000000-0000-4000-8000-000000000001/tokens",
-		Key:         "differ:run_123:push-token",
+		Key:         "workflow:run_123:push-token",
 		RequestHash: "request-a",
 	}
 	_, err := store.Do(context.Background(), input, func(context.Context) (createRepoTokenResponse, error) {
@@ -79,7 +79,7 @@ func TestMemoryIdempotencyStoreScopesKeys(t *testing.T) {
 	store := newMemoryIdempotencyStore(time.Now)
 	firstScope := idempotencyInput{
 		Scope:       "POST /v1/repos/repo_00000000-0000-4000-8000-000000000001/tokens",
-		Key:         "differ:shared:reader-token",
+		Key:         "shared:reader-token",
 		RequestHash: "request-a",
 	}
 	secondScope := firstScope
@@ -113,7 +113,7 @@ func TestMemoryIdempotencyStoreExpiresResponseCache(t *testing.T) {
 	})
 	input := idempotencyInput{
 		Scope:       "POST /v1/repos/repo_00000000-0000-4000-8000-000000000001/tokens",
-		Key:         "differ:run_123:push-token",
+		Key:         "workflow:run_123:push-token",
 		RequestHash: "request-a",
 	}
 

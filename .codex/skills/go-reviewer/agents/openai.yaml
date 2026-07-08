@@ -1,0 +1,4 @@
+interface:
+  display_name: "Go Reviewer"
+  short_description: "Review Go code for correctness and idiom."
+  default_prompt: "Use the Go reviewer skill to review this Go change."
