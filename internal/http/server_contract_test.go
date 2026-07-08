@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	httpapi "skyvalley.ac/m/v2/internal/http"
+	httpapi "github.com/sky-valley/gitrdone/internal/http"
 )
 
 const controlAuthorization = "Bearer internal-admin-token"
@@ -35,7 +35,7 @@ func TestControlAPIContract(t *testing.T) {
 	})
 
 	t.Run("internal traffic creates a repo", func(t *testing.T) {
-		res, body := createRepo(t, server, "differ", "project-create", "main")
+		res, body := createRepo(t, server, "acme", "project-create", "main")
 
 		requireStatus(t, res, body, http.StatusCreated)
 		var got struct {
@@ -49,8 +49,8 @@ func TestControlAPIContract(t *testing.T) {
 			t.Fatal("id is empty")
 		}
 		assertExternalRepoID(t, got.ID)
-		if got.Repo != "differ/project-create" {
-			t.Fatalf("repo = %q, want differ/project-create", got.Repo)
+		if got.Repo != "acme/project-create" {
+			t.Fatalf("repo = %q, want acme/project-create", got.Repo)
 		}
 		wantGitURL := "https://git.example.com/git/repos/" + got.ID + ".git"
 		if got.GitURL != wantGitURL {
@@ -70,17 +70,17 @@ func TestControlAPIContract(t *testing.T) {
 		}{
 			{
 				name: "invalid namespace",
-				body: `{"namespace":"differ/team","name":"project","defaultBranch":"main"}`,
+				body: `{"namespace":"acme/team","name":"project","defaultBranch":"main"}`,
 				want: "namespace must be 1-128 characters and contain only letters, numbers, dot, underscore, or dash",
 			},
 			{
 				name: "invalid name",
-				body: `{"namespace":"differ","name":"project alpha","defaultBranch":"main"}`,
+				body: `{"namespace":"acme","name":"project alpha","defaultBranch":"main"}`,
 				want: "name must be 1-128 characters and contain only letters, numbers, dot, underscore, or dash",
 			},
 			{
 				name: "invalid default branch",
-				body: `{"namespace":"differ","name":"project-branch","defaultBranch":"main..bad"}`,
+				body: `{"namespace":"acme","name":"project-branch","defaultBranch":"main..bad"}`,
 				want: "defaultBranch must be a valid branch name",
 			},
 		}
@@ -102,7 +102,7 @@ func TestControlAPIContract(t *testing.T) {
 	})
 
 	t.Run("create repo rejects trailing JSON", func(t *testing.T) {
-		res, body := request(t, server, http.MethodPost, "/v1/repos", controlAuthorization, "application/json", `{"namespace":"differ","name":"json-trailing","defaultBranch":"main"} {}`)
+		res, body := request(t, server, http.MethodPost, "/v1/repos", controlAuthorization, "application/json", `{"namespace":"acme","name":"json-trailing","defaultBranch":"main"} {}`)
 
 		requireStatus(t, res, body, http.StatusBadRequest)
 		var got struct {
@@ -115,7 +115,7 @@ func TestControlAPIContract(t *testing.T) {
 	})
 
 	t.Run("create repo rejects oversized JSON bodies", func(t *testing.T) {
-		oversized := strings.Repeat(" ", 70*1024) + `{"namespace":"differ","name":"json-oversized","defaultBranch":"main"}`
+		oversized := strings.Repeat(" ", 70*1024) + `{"namespace":"acme","name":"json-oversized","defaultBranch":"main"}`
 
 		res, body := request(t, server, http.MethodPost, "/v1/repos", controlAuthorization, "application/json", oversized)
 
@@ -198,7 +198,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 			"/v1/repos/"+created.ID+"/tokens",
 			controlAuthorization,
 			"application/json",
-			`{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc"}`,
+			`{"scope":"readwrite","ttlSeconds":3600,"subject":"bootstrap-job-abc"}`,
 		)
 
 		requireStatus(t, res, body, http.StatusCreated)
@@ -218,8 +218,8 @@ func TestTokenProvisioningContract(t *testing.T) {
 		if got.Scope != "readwrite" {
 			t.Fatalf("scope = %q, want readwrite", got.Scope)
 		}
-		if got.Subject != "differ-bootstrap-job-abc" {
-			t.Fatalf("subject = %q, want differ-bootstrap-job-abc", got.Subject)
+		if got.Subject != "bootstrap-job-abc" {
+			t.Fatalf("subject = %q, want bootstrap-job-abc", got.Subject)
 		}
 		assertFutureExpiryWithin(t, got.ExpiresAt, time.Hour)
 		wantGitURL := "https://git.example.com/git/repos/" + created.ID + ".git"
@@ -246,7 +246,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 			"/v1/repos/"+created.ID+"/tokens",
 			controlAuthorization,
 			"application/json",
-			`{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`,
+			`{"scope":"read","ttlSeconds":3600,"subject":"reader-job"}`,
 		)
 		requireStatus(t, res, body, http.StatusCreated)
 		var createdToken struct {
@@ -276,8 +276,8 @@ func TestTokenProvisioningContract(t *testing.T) {
 		if token.Scope != "read" {
 			t.Fatalf("scope = %q, want read", token.Scope)
 		}
-		if token.Subject != "differ-reader-job" {
-			t.Fatalf("subject = %q, want differ-reader-job", token.Subject)
+		if token.Subject != "reader-job" {
+			t.Fatalf("subject = %q, want reader-job", token.Subject)
 		}
 		assertRFC3339(t, token.CreatedAt)
 		if token.ExpiresAt != createdToken.ExpiresAt {
@@ -316,7 +316,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 			"/v1/repos/"+created.ID+"/tokens",
 			controlAuthorization,
 			"application/json",
-			`{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`,
+			`{"scope":"read","ttlSeconds":3600,"subject":"reader-job"}`,
 		)
 		requireStatus(t, res, body, http.StatusCreated)
 		var createdToken struct {
@@ -365,7 +365,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 			"/v1/repos/"+created.ID+"/tokens",
 			controlAuthorization,
 			"application/json",
-			`{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`,
+			`{"scope":"read","ttlSeconds":3600,"subject":"reader-job"}`,
 		)
 		requireStatus(t, res, body, http.StatusCreated)
 		var createdToken struct {
@@ -403,7 +403,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 			"/v1/repos/"+firstRepo.ID+"/tokens",
 			controlAuthorization,
 			"application/json",
-			`{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`,
+			`{"scope":"read","ttlSeconds":3600,"subject":"reader-job"}`,
 		)
 		requireStatus(t, res, body, http.StatusCreated)
 		var createdToken struct {
@@ -425,11 +425,11 @@ func TestTokenProvisioningContract(t *testing.T) {
 
 	t.Run("repo token creation is idempotent by caller key", func(t *testing.T) {
 		created := createRepoFixture(t, server, "idempotent-token")
-		requestBody := `{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-import:imp_123:source-read"}`
+		requestBody := `{"scope":"readwrite","ttlSeconds":3600,"subject":"import:imp_123:source-read"}`
 		headers := map[string]string{
 			"Authorization":   controlAuthorization,
 			"Content-Type":    "application/json",
-			"Idempotency-Key": "differ:import:imp_123:source-read-token",
+			"Idempotency-Key": "import:imp_123:source-read-token",
 		}
 
 		firstRes, firstBody := requestWithHeaders(t, server, http.MethodPost, "/v1/repos/"+created.ID+"/tokens", headers, requestBody)
@@ -457,10 +457,10 @@ func TestTokenProvisioningContract(t *testing.T) {
 		headers := map[string]string{
 			"Authorization":   controlAuthorization,
 			"Content-Type":    "application/json",
-			"Idempotency-Key": "differ:adaptation-run:run_123:push-token",
+			"Idempotency-Key": "workflow:run_123:push-token",
 		}
-		firstRequest := `{"scope":"write","ttlSeconds":3600,"subject":"differ-run:run_123:push"}`
-		changedRequest := `{"scope":"read","ttlSeconds":3600,"subject":"differ-run:run_123:push"}`
+		firstRequest := `{"scope":"write","ttlSeconds":3600,"subject":"workflow:run_123:push"}`
+		changedRequest := `{"scope":"read","ttlSeconds":3600,"subject":"workflow:run_123:push"}`
 
 		res, body := requestWithHeaders(t, server, http.MethodPost, "/v1/repos/"+created.ID+"/tokens", headers, firstRequest)
 		requireStatus(t, res, body, http.StatusCreated)
@@ -480,11 +480,11 @@ func TestTokenProvisioningContract(t *testing.T) {
 	t.Run("repo token idempotency keys are scoped by repo", func(t *testing.T) {
 		firstRepo := createRepoFixture(t, server, "idempotent-token-repo-one")
 		secondRepo := createRepoFixture(t, server, "idempotent-token-repo-two")
-		requestBody := `{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"}`
+		requestBody := `{"scope":"read","ttlSeconds":3600,"subject":"reader-job"}`
 		headers := map[string]string{
 			"Authorization":   controlAuthorization,
 			"Content-Type":    "application/json",
-			"Idempotency-Key": "differ:shared:reader-token",
+			"Idempotency-Key": "shared:reader-token",
 		}
 
 		firstRes, firstBody := requestWithHeaders(t, server, http.MethodPost, "/v1/repos/"+firstRepo.ID+"/tokens", headers, requestBody)
@@ -553,7 +553,7 @@ func TestTokenProvisioningContract(t *testing.T) {
 		}{
 			{
 				name: "invalid scope",
-				body: `{"scope":"admin","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc"}`,
+				body: `{"scope":"admin","ttlSeconds":3600,"subject":"bootstrap-job-abc"}`,
 				want: "scope must be read, write, or readwrite",
 			},
 			{
@@ -568,17 +568,17 @@ func TestTokenProvisioningContract(t *testing.T) {
 			},
 			{
 				name: "ttl too long",
-				body: `{"scope":"read","ttlSeconds":604801,"subject":"differ-bootstrap-job-abc"}`,
+				body: `{"scope":"read","ttlSeconds":604801,"subject":"bootstrap-job-abc"}`,
 				want: "ttlSeconds must be between 1 and 604800",
 			},
 			{
 				name: "trailing JSON",
-				body: `{"scope":"read","ttlSeconds":3600,"subject":"differ-reader-job"} {}`,
+				body: `{"scope":"read","ttlSeconds":3600,"subject":"reader-job"} {}`,
 				want: "request body must be valid JSON for create repo token",
 			},
 			{
 				name: "kind is not part of the token model",
-				body: `{"scope":"read","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc","kind":"internal"}`,
+				body: `{"scope":"read","ttlSeconds":3600,"subject":"bootstrap-job-abc","kind":"internal"}`,
 				want: "request body must be valid JSON for create repo token",
 			},
 		}
@@ -628,7 +628,7 @@ func TestControlAuthContract(t *testing.T) {
 			method:      http.MethodPost,
 			target:      "/v1/repos",
 			contentType: "application/json",
-			body:        `{"namespace":"differ","name":"project-123","defaultBranch":"main"}`,
+			body:        `{"namespace":"acme","name":"project-123","defaultBranch":"main"}`,
 		},
 		{
 			name:   "get repo rejects missing auth",
@@ -645,7 +645,7 @@ func TestControlAuthContract(t *testing.T) {
 			method:      http.MethodPost,
 			target:      "/v1/repos/repo_123/tokens",
 			contentType: "application/json",
-			body:        `{"scope":"readwrite","ttlSeconds":3600,"subject":"differ-bootstrap-job-abc"}`,
+			body:        `{"scope":"readwrite","ttlSeconds":3600,"subject":"bootstrap-job-abc"}`,
 		},
 		{
 			name:   "list tokens rejects missing auth",
@@ -663,7 +663,7 @@ func TestControlAuthContract(t *testing.T) {
 			target:      "/v1/repos",
 			auth:        "Bearer wrong-token",
 			contentType: "application/json",
-			body:        `{"namespace":"differ","name":"project-123","defaultBranch":"main"}`,
+			body:        `{"namespace":"acme","name":"project-123","defaultBranch":"main"}`,
 		},
 		{
 			name:        "control route rejects non-bearer authorization",
@@ -671,7 +671,7 @@ func TestControlAuthContract(t *testing.T) {
 			target:      "/v1/repos",
 			auth:        "Basic aW50ZXJuYWwtYWRtaW4tdG9rZW4=",
 			contentType: "application/json",
-			body:        `{"namespace":"differ","name":"project-123","defaultBranch":"main"}`,
+			body:        `{"namespace":"acme","name":"project-123","defaultBranch":"main"}`,
 		},
 	}
 

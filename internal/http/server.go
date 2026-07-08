@@ -10,6 +10,7 @@ type Config struct {
 	BaseURL              string
 	ControlBearer        string
 	StorageRoot          string
+	MaxLFSObjectBytes    int64
 	AccessLog            io.Writer
 	TrustedProxyPrefixes []netip.Prefix
 }
@@ -38,6 +39,7 @@ func NewServerWithStores(config Config, repos repoStore, idempotency idempotency
 		ListRepoTokens:  control(listRepoTokensHandler(repos)),
 		RevokeRepoToken: control(revokeRepoTokenHandler(repos)),
 		GitSmartHTTP:    gitSmartHTTPHandler(repos, execGitHTTPBackend{}),
+		GitLFS:          gitLFSHandler(repos, newFilesystemLFSObjectStore(config.StorageRoot), config.MaxLFSObjectBytes),
 		GitShowDiff:     gitDiffHandler(repos, execGitDiffBackend{}, gitDiffShow),
 		GitCompareDiff:  gitDiffHandler(repos, execGitDiffBackend{}, gitDiffCompare),
 	})

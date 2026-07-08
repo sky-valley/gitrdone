@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	httpapi "skyvalley.ac/m/v2/internal/http"
+	httpapi "github.com/sky-valley/gitrdone/internal/http"
 )
 
 func TestAgentDiscoveryDocumentsContract(t *testing.T) {
@@ -34,9 +34,9 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 		requireContentType(t, res, "text/plain")
 		requireNoSniff(t, res)
 		requireBodyIncludes(t, body, "# gitrdone")
-		requireBodyIncludes(t, body, "> gitrdone is an authenticated Git smart HTTP service")
+		requireBodyIncludes(t, body, "> gitrdone is an authenticated Git smart HTTP and Git LFS service")
 		requireBodyIncludes(t, body, "[Agent guide](https://git.example.com/AGENTS.md)")
-		requireBodyIncludes(t, body, "[Git smart HTTP](https://git.example.com/git/repos/{repoID}.git)")
+		requireBodyIncludes(t, body, "[Git smart HTTP and LFS](https://git.example.com/git/repos/{repoID}.git)")
 		requireBodyIncludes(t, body, "For retriable automation, include Idempotency-Key on token creation")
 		requireBodyIncludes(t, body, "List and revoke repo tokens with the control bearer token; token values are returned only at creation.")
 	})
@@ -65,10 +65,13 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 				requireBodyIncludes(t, body, "GET /v1/repos/{repoID}/tokens")
 				requireBodyIncludes(t, body, "POST /v1/repos/{repoID}/tokens/{tokenID}/revoke")
 				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/info/refs?service=git-upload-pack")
+				requireBodyIncludes(t, body, "POST /git/repos/{repoID}.git/info/lfs/objects/batch")
+				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/info/lfs/objects/{oid}")
+				requireBodyIncludes(t, body, "Git LFS lock verification returns an empty conflict set")
 				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/show/{sha}.diff")
 				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/compare/{base}..{head}.diff")
 				requireBodyIncludes(t, body, "## Reliable token creation")
-				requireBodyIncludes(t, body, "Idempotency-Key: differ:import:imp_123:source-read-token")
+				requireBodyIncludes(t, body, "Idempotency-Key: import:imp_123:source-read-token")
 				requireBodyIncludes(t, body, "Reuse the same key only for the same repo, scope, subject, and TTL.")
 				requireBodyIncludes(t, body, "If the same key is reused for a different token request, gitrdone returns 409 Conflict")
 				requireBodyIncludes(t, body, "## Token lifecycle")

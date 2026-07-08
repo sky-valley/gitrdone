@@ -127,7 +127,7 @@ func TestMemoryRepoStoreCreateRepoToken(t *testing.T) {
 	token, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
 		RepoID:     repo.ID,
 		Scope:      "readwrite",
-		Subject:    "differ-bootstrap-job-abc",
+		Subject:    "bootstrap-job-abc",
 		TTLSeconds: 3600,
 	})
 	if err != nil {
@@ -156,8 +156,8 @@ func TestMemoryRepoStoreCreateRepoToken(t *testing.T) {
 	if token.Scope != "readwrite" {
 		t.Fatalf("scope = %q, want readwrite", token.Scope)
 	}
-	if token.Subject != "differ-bootstrap-job-abc" {
-		t.Fatalf("subject = %q, want differ-bootstrap-job-abc", token.Subject)
+	if token.Subject != "bootstrap-job-abc" {
+		t.Fatalf("subject = %q, want bootstrap-job-abc", token.Subject)
 	}
 	if token.CreatedAt != now {
 		t.Fatalf("createdAt = %s, want %s", token.CreatedAt, now)
@@ -201,7 +201,7 @@ func TestMemoryRepoStoreListRevokeAndAuditRepoTokens(t *testing.T) {
 	token, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
 		RepoID:     repo.ID,
 		Scope:      "read",
-		Subject:    "differ-reader-job",
+		Subject:    "reader-job",
 		TTLSeconds: 3600,
 	})
 	if err != nil {
@@ -231,8 +231,8 @@ func TestMemoryRepoStoreListRevokeAndAuditRepoTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if grant.Subject != "differ-reader-job" {
-		t.Fatalf("grant subject = %q, want differ-reader-job", grant.Subject)
+	if grant.Subject != "reader-job" {
+		t.Fatalf("grant subject = %q, want reader-job", grant.Subject)
 	}
 	tokens, err = store.ListRepoTokens(context.Background(), listRepoTokensInput{RepoID: repo.ID})
 	if err != nil {
@@ -295,7 +295,7 @@ func TestMemoryRepoStoreTokenLifecycleRequiresMatchingRepo(t *testing.T) {
 	token, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
 		RepoID:     firstRepo.ID,
 		Scope:      "read",
-		Subject:    "differ-reader-job",
+		Subject:    "reader-job",
 		TTLSeconds: 3600,
 	})
 	if err != nil {
@@ -317,7 +317,7 @@ func TestMemoryRepoStoreCreateRepoTokenRequiresExistingRepo(t *testing.T) {
 	_, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
 		RepoID:     "repo_missing",
 		Scope:      "read",
-		Subject:    "differ-bootstrap-job-abc",
+		Subject:    "bootstrap-job-abc",
 		TTLSeconds: 3600,
 	})
 	if !errors.Is(err, errRepoNotFound) {

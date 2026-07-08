@@ -1,0 +1,4 @@
+interface:
+  display_name: "Baby Steps"
+  short_description: "Work red-green in small truthful slices."
+  default_prompt: "Use baby steps to implement this change with a narrow red-green loop."

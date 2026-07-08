@@ -1,0 +1,4 @@
+interface:
+  display_name: "Go Boundary Reviewer"
+  short_description: "Review Go ownership and package boundaries."
+  default_prompt: "Use the Go boundary reviewer skill to review this boundary-heavy Go change."

@@ -1,22 +1,17 @@
 # gitrdone Sentry
 
-Sentry project details:
+gitrdone can report sanitized errors to Sentry when `SENTRY_DSN` is configured.
+Leave `SENTRY_DSN` unset to disable Sentry reporting.
 
-- Org: `sky-valley-ambient-computing`
-- Project slug: `gitrdone`
-- Project ID: `4511632392585216`
-- Client key: `a7d68c7c3711e1426d841348664398c0`
-- DSN:
-  `https://a7d68c7c3711e1426d841348664398c0@o4511632351363072.ingest.us.sentry.io/4511632392585216`
-
-The DSN is a public routing identifier, not a credential. Keep Sentry auth
-tokens and deployment secrets out of repo.
+The DSN is a public routing identifier, not a credential, but deployment-specific
+DSNs and Sentry project details should stay in your environment configuration.
+Keep Sentry auth tokens and deployment secrets out of repo.
 
 Hosted environments:
 
-- Dev: `SENTRY_ENVIRONMENT=dev`, template:
+- Development: `SENTRY_ENVIRONMENT=dev`, template:
   `deploy/env/gitrdone-dev.env.example`
-- Main: `SENTRY_ENVIRONMENT=main`, template:
+- Production: `SENTRY_ENVIRONMENT=main`, template:
   `deploy/env/gitrdone-main.env.example`
 
 Deployment should set `SENTRY_RELEASE` to the exact deployed Git SHA. Hosted

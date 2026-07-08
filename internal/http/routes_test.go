@@ -163,7 +163,7 @@ func TestGitRoutesRejectNamespaceAliases(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/differ/project-123.git/info/refs?service=git-upload-pack", nil))
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/acme/project-123.git/info/refs?service=git-upload-pack", nil))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)

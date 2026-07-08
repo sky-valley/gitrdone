@@ -55,23 +55,27 @@ func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
 	if cfg.shutdownTimeout != defaultShutdownTimeout {
 		t.Fatalf("shutdownTimeout = %s, want %s", cfg.shutdownTimeout, defaultShutdownTimeout)
 	}
+	if cfg.maxLFSObjectBytes != defaultMaxLFSObjectBytes {
+		t.Fatalf("maxLFSObjectBytes = %d, want %d", cfg.maxLFSObjectBytes, defaultMaxLFSObjectBytes)
+	}
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "127.0.0.1")
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "::1")
 }
 
 func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	values := map[string]string{
-		"GITRDONE_ADDR":             "127.0.0.1:9090",
-		"GITRDONE_BASE_URL":         "https://git.example.com",
-		"GITRDONE_CONTROL_BEARER":   "internal-admin-token",
-		"GITRDONE_DATABASE_URL":     "postgres://gitrdone:secret@db.example.com:5432/gitrdone?sslmode=require",
-		"GITRDONE_STORAGE_ROOT":     "/var/lib/gitrdone",
-		"GITRDONE_TRUSTED_PROXIES":  "10.0.0.0/8,192.0.2.10",
-		"GITRDONE_SHUTDOWN_TIMEOUT": "30s",
-		"SENTRY_DSN":                "https://public@example.ingest.sentry.io/123",
-		"SENTRY_ENVIRONMENT":        "main",
-		"SENTRY_RELEASE":            "abc1234",
-		"SENTRY_TRACES_SAMPLE_RATE": "0.25",
+		"GITRDONE_ADDR":                 "127.0.0.1:9090",
+		"GITRDONE_BASE_URL":             "https://git.example.com",
+		"GITRDONE_CONTROL_BEARER":       "internal-admin-token",
+		"GITRDONE_DATABASE_URL":         "postgres://gitrdone:secret@db.example.com:5432/gitrdone?sslmode=require",
+		"GITRDONE_STORAGE_ROOT":         "/var/lib/gitrdone",
+		"GITRDONE_TRUSTED_PROXIES":      "10.0.0.0/8,192.0.2.10",
+		"GITRDONE_SHUTDOWN_TIMEOUT":     "30s",
+		"GITRDONE_MAX_LFS_OBJECT_BYTES": "12345",
+		"SENTRY_DSN":                    "https://public@example.ingest.sentry.io/123",
+		"SENTRY_ENVIRONMENT":            "main",
+		"SENTRY_RELEASE":                "abc1234",
+		"SENTRY_TRACES_SAMPLE_RATE":     "0.25",
 	}
 
 	cfg, err := configFromEnv(func(key string) string {
@@ -98,6 +102,9 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	}
 	if cfg.shutdownTimeout != 30*time.Second {
 		t.Fatalf("shutdownTimeout = %s, want 30s", cfg.shutdownTimeout)
+	}
+	if cfg.maxLFSObjectBytes != 12345 {
+		t.Fatalf("maxLFSObjectBytes = %d, want 12345", cfg.maxLFSObjectBytes)
 	}
 	if cfg.sentryDSN != "https://public@example.ingest.sentry.io/123" {
 		t.Fatalf("sentryDSN = %q, want configured DSN", cfg.sentryDSN)
@@ -170,6 +177,27 @@ func TestConfigFromEnvRejectsNonPositiveShutdownTimeout(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("err is nil, want non-positive shutdown timeout error")
+	}
+}
+
+func TestConfigFromEnvRejectsInvalidMaxLFSObjectBytes(t *testing.T) {
+	tests := []string{"not-a-number", "0", "-1"}
+	for _, value := range tests {
+		t.Run(value, func(t *testing.T) {
+			_, err := configFromEnv(func(key string) string {
+				switch key {
+				case "GITRDONE_CONTROL_BEARER":
+					return "internal-admin-token"
+				case "GITRDONE_MAX_LFS_OBJECT_BYTES":
+					return value
+				default:
+					return ""
+				}
+			})
+			if err == nil {
+				t.Fatal("err is nil, want invalid max LFS object bytes error")
+			}
+		})
 	}
 }
 

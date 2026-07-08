@@ -9,9 +9,9 @@ import (
 
 func TestGitDiffRealGitCommands(t *testing.T) {
 	fixture := newGitSmartHTTPFixture(t, "diff")
-	readwriteToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "readwrite", "differ-bootstrap-job")
-	readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "differ-reader-job")
-	writeToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "write", "differ-writer-job")
+	readwriteToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "readwrite", "bootstrap-job")
+	readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "reader-job")
+	writeToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "write", "writer-job")
 
 	// Push a two-commit history: base = "first version", head = "second version".
 	worktree := newGitWorktree(t, "README.md", "first version\n")
