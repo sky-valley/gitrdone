@@ -12,14 +12,15 @@ func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 	ctx := context.Background()
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
 	proposedContent := intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"}
+	admission := &recordingAdmission{}
 	projection := &recordingProjection{}
-	repository, err := intent.NewRepository(initialContent, projection)
+	repository, err := intent.NewRepository(initialContent, admission, projection)
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
 	initialIntent := repository.CurrentIntent()
 
-	proposed, err := repository.Propose(intent.Proposal{
+	proposed, err := repository.Propose(ctx, intent.Proposal{
 		BaseIntent: initialIntent.ID,
 		Content:    proposedContent,
 		Producer:   "ion",
@@ -51,6 +52,12 @@ func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 	}
 	if len(projection.advances) != 0 {
 		t.Fatalf("projection advances after propose = %d, want 0", len(projection.advances))
+	}
+	if len(admission.admissions) != 1 {
+		t.Fatalf("content admissions = %d, want 1", len(admission.admissions))
+	}
+	if admission.admissions[0].versionID != proposed.Version.ID || admission.admissions[0].content != proposedContent {
+		t.Fatalf("content admission = %#v, want version %q content %#v", admission.admissions[0], proposed.Version.ID, proposedContent)
 	}
 
 	promoted, err := repository.Promote(ctx, intent.PromoteRequest{
@@ -101,14 +108,15 @@ func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 
 func TestRepositoryHoldsStaleProposalInsteadOfAdvancingIntent(t *testing.T) {
 	ctx := context.Background()
+	admission := &recordingAdmission{}
 	projection := &recordingProjection{}
-	repository, err := intent.NewRepository(intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}, projection)
+	repository, err := intent.NewRepository(intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}, admission, projection)
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
 	staleIntent := repository.CurrentIntent()
 
-	first, err := repository.Propose(intent.Proposal{
+	first, err := repository.Propose(ctx, intent.Proposal{
 		BaseIntent: staleIntent.ID,
 		Content:    intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
 		Producer:   "ion",
@@ -125,7 +133,7 @@ func TestRepositoryHoldsStaleProposalInsteadOfAdvancingIntent(t *testing.T) {
 	}
 	currentIntent := repository.CurrentIntent()
 
-	stale, err := repository.Propose(intent.Proposal{
+	stale, err := repository.Propose(ctx, intent.Proposal{
 		BaseIntent: staleIntent.ID,
 		Content:    intent.ContentRef{Engine: "git", Revision: "cccccccc"},
 		Producer:   "ion",
@@ -151,15 +159,16 @@ func TestRepositoryHoldsStaleProposalInsteadOfAdvancingIntent(t *testing.T) {
 func TestRepositoryKeepsProposalWhenProjectionFails(t *testing.T) {
 	ctx := context.Background()
 	projectionErr := errors.New("projection unavailable")
+	admission := &recordingAdmission{}
 	projection := &recordingProjection{err: projectionErr}
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
-	repository, err := intent.NewRepository(initialContent, projection)
+	repository, err := intent.NewRepository(initialContent, admission, projection)
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
 	initialIntent := repository.CurrentIntent()
 
-	proposed, err := repository.Propose(intent.Proposal{
+	proposed, err := repository.Propose(ctx, intent.Proposal{
 		BaseIntent: initialIntent.ID,
 		Content:    intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
 		Producer:   "ion",
@@ -185,6 +194,55 @@ func TestRepositoryKeepsProposalWhenProjectionFails(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("retry promote: %v", err)
 	}
+}
+
+func TestRepositoryDoesNotRecordContentWhenAdmissionFails(t *testing.T) {
+	ctx := context.Background()
+	admissionErr := errors.New("content missing")
+	admission := &recordingAdmission{err: admissionErr}
+	repository, err := intent.NewRepository(
+		intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"},
+		admission,
+		&recordingProjection{},
+	)
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	initialIntent := repository.CurrentIntent()
+
+	_, err = repository.Propose(ctx, intent.Proposal{
+		BaseIntent: initialIntent.ID,
+		Content:    intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:   "ion",
+	})
+	if !errors.Is(err, admissionErr) {
+		t.Fatalf("propose error = %v, want admission error", err)
+	}
+	if len(admission.admissions) != 1 {
+		t.Fatalf("content admissions = %d, want 1", len(admission.admissions))
+	}
+	_, err = repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      admission.admissions[0].versionID,
+		ExpectedIntent: initialIntent.ID,
+	})
+	if !errors.Is(err, intent.ErrVersionNotFound) {
+		t.Fatalf("promote unrecorded version error = %v, want ErrVersionNotFound", err)
+	}
+}
+
+type recordingAdmission struct {
+	admissions []contentAdmission
+	err        error
+}
+
+type contentAdmission struct {
+	versionID intent.VersionID
+	content   intent.ContentRef
+}
+
+func (admission *recordingAdmission) Admit(_ context.Context, versionID intent.VersionID, content intent.ContentRef) error {
+	admission.admissions = append(admission.admissions, contentAdmission{versionID: versionID, content: content})
+	return admission.err
 }
 
 type recordingProjection struct {

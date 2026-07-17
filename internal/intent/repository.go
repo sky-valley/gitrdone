@@ -72,6 +72,10 @@ type Promoted struct {
 	Intent    Revision
 }
 
+type ContentAdmission interface {
+	Admit(ctx context.Context, versionID VersionID, content ContentRef) error
+}
+
 type TrunkProjection interface {
 	Advance(ctx context.Context, expected, next ContentRef) error
 }
@@ -80,14 +84,18 @@ type Repository struct {
 	promotionMu sync.Mutex
 	stateMu     sync.RWMutex
 	current     Revision
+	admission   ContentAdmission
 	projection  TrunkProjection
 	revisions   map[RevisionID]Revision
 	versions    map[VersionID]Version
 }
 
-func NewRepository(initial ContentRef, projection TrunkProjection) (*Repository, error) {
+func NewRepository(initial ContentRef, admission ContentAdmission, projection TrunkProjection) (*Repository, error) {
 	if initial.Engine == "" || initial.Revision == "" {
 		return nil, errors.New("initial content reference requires engine and revision")
+	}
+	if admission == nil {
+		return nil, errors.New("content admission is required")
 	}
 	if projection == nil {
 		return nil, errors.New("trunk projection is required")
@@ -103,6 +111,7 @@ func NewRepository(initial ContentRef, projection TrunkProjection) (*Repository,
 	}
 	return &Repository{
 		current:    initialIntent,
+		admission:  admission,
 		projection: projection,
 		revisions: map[RevisionID]Revision{
 			initialIntent.ID: initialIntent,
@@ -117,7 +126,7 @@ func (repository *Repository) CurrentIntent() Revision {
 	return repository.current
 }
 
-func (repository *Repository) Propose(proposal Proposal) (Proposed, error) {
+func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (Proposed, error) {
 	if proposal.Content.Engine == "" || proposal.Content.Revision == "" {
 		return Proposed{}, errors.New("proposed content reference requires engine and revision")
 	}
@@ -134,20 +143,27 @@ func (repository *Repository) Propose(proposal Proposal) (Proposed, error) {
 		return Proposed{}, fmt.Errorf("create version id: %w", err)
 	}
 
-	repository.stateMu.Lock()
-	defer repository.stateMu.Unlock()
-	if _, ok := repository.revisions[proposal.BaseIntent]; !ok {
+	repository.stateMu.RLock()
+	_, baseExists := repository.revisions[proposal.BaseIntent]
+	repository.stateMu.RUnlock()
+	if !baseExists {
 		return Proposed{}, ErrIntentNotFound
 	}
 
-	change := Change{ID: ChangeID(changeID)}
 	version := Version{
 		ID:         VersionID(versionID),
-		ChangeID:   change.ID,
+		ChangeID:   ChangeID(changeID),
 		BaseIntent: proposal.BaseIntent,
 		Content:    proposal.Content,
 		Producer:   proposal.Producer,
 	}
+	if err := repository.admission.Admit(ctx, version.ID, version.Content); err != nil {
+		return Proposed{}, fmt.Errorf("admit proposed content: %w", err)
+	}
+
+	repository.stateMu.Lock()
+	defer repository.stateMu.Unlock()
+	change := Change{ID: version.ChangeID}
 	repository.versions[version.ID] = version
 
 	return Proposed{Change: change, Version: version}, nil
