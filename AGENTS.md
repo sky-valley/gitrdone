@@ -25,7 +25,14 @@ Tool mapping:
 
 ## Project Guidance
 
-- gitrdone is a generic Git artifact service. Keep caller-specific product concepts such as recommendations, workflows, tenants, and runtime users out of its core model unless they are opaque caller metadata.
+- Before product or architecture work, read `docs/vision.md` and `docs/reservations-and-resolutions.md`. Use `docs/vision-source-handoff.md` for the verbatim original context. The canonical vision and agreed resolutions win where they differ from the original handoff.
+- The current Git server is disposable scaffolding, not an architectural constraint, unless the user explicitly asks for incremental evolution.
+- Protect both parts of the mission: repositories with native judgement and a modular architecture. Git compatibility is valuable but subordinate to that mission.
+- Work through contradictions as a colleague: state the tension, offer candidate resolutions and trade-offs, and distinguish an impossible combination from an open design problem.
+
+### Current implementation guidance
+
+- The existing HTTP service is a generic Git artifact service. While it exists, keep caller-specific product concepts such as recommendations, workflows, tenants, and runtime users out of that service unless they are opaque caller metadata. Do not mistake this temporary boundary for the future judgement domain.
 - Control API identity is the repo ID. Repo names are labels and Git-facing locator components, not canonical control identifiers.
 - Keep HTTP handlers thin over small interfaces. Put lifecycle behavior in repository/service implementations and keep request/response mapping in handlers.
 - Work red-green for implementation changes: add or update focused tests first, confirm the failure, then implement the smallest change that makes them pass.

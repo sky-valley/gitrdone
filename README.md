@@ -1,8 +1,10 @@
 # gitrdone
 
-Authenticated Git smart HTTP with a small control API for repo-backed workflows.
+The current implementation is authenticated Git smart HTTP with a small control API for repo-backed workflows.
 
-gitrdone is intentionally narrow: it creates backing Git repos, mints repo-scoped access tokens, and serves those repos over normal Git HTTP routes, including the Git LFS Batch and Basic Transfer APIs. Higher-level product concepts belong in the caller.
+That implementation is intentionally narrow: it creates backing Git repos, mints repo-scoped access tokens, and serves those repos over normal Git HTTP routes, including the Git LFS Batch and Basic Transfer APIs. Higher-level product concepts do not belong in this temporary HTTP artifact service.
+
+This README describes the current implementation, which is disposable scaffolding rather than the product boundary. The intended product is a modular repository system with judgement as a native capability. Read the canonical [product vision](docs/vision.md) before architecture work; the [original handoff](docs/vision-source-handoff.md) is retained verbatim as historical context.
 
 ## Requirements
 
