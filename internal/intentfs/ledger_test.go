@@ -1,0 +1,210 @@
+package intentfs_test
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/sky-valley/gitrdone/internal/intent"
+	"github.com/sky-valley/gitrdone/internal/intentfs"
+)
+
+func TestRepositoryRestoresIntentAndProposalIdempotencyFromJournal(t *testing.T) {
+	ctx := context.Background()
+	journalPath := filepath.Join(t.TempDir(), "intent.journal")
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	proposedContent := intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"}
+
+	firstLedger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("open first ledger: %v", err)
+	}
+	firstAdmission := &recordingAdmission{}
+	firstProjection := &recordingProjection{}
+	firstRepository, err := intent.OpenRepository(ctx, initialContent, firstLedger, firstAdmission, firstProjection)
+	if err != nil {
+		t.Fatalf("open first repository: %v", err)
+	}
+	initialIntent := firstRepository.CurrentIntent()
+	proposal := intent.Proposal{
+		IdempotencyKey: "request-1",
+		BaseIntent:     initialIntent.ID,
+		Content:        proposedContent,
+		Producer:       "ion",
+	}
+	proposed, err := firstRepository.Propose(ctx, proposal)
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	promoted, err := firstRepository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      proposed.Version.ID,
+		ExpectedIntent: initialIntent.ID,
+	})
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if err := firstLedger.Close(); err != nil {
+		t.Fatalf("close first ledger: %v", err)
+	}
+
+	secondLedger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("reopen ledger: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := secondLedger.Close(); err != nil {
+			t.Errorf("close second ledger: %v", err)
+		}
+	})
+	secondAdmission := &recordingAdmission{}
+	secondRepository, err := intent.OpenRepository(ctx, initialContent, secondLedger, secondAdmission, &recordingProjection{})
+	if err != nil {
+		t.Fatalf("reopen repository: %v", err)
+	}
+	if got := secondRepository.CurrentIntent(); got != promoted.Intent {
+		t.Fatalf("restored current intent = %#v, want %#v", got, promoted.Intent)
+	}
+
+	retried, err := secondRepository.Propose(ctx, proposal)
+	if err != nil {
+		t.Fatalf("retry proposal: %v", err)
+	}
+	if retried != proposed {
+		t.Fatalf("retried proposal = %#v, want %#v", retried, proposed)
+	}
+	if len(secondAdmission.admissions) != 0 {
+		t.Fatalf("content admissions on idempotent retry = %d, want 0", len(secondAdmission.admissions))
+	}
+	conflictingProposal := proposal
+	conflictingProposal.Content = intent.ContentRef{Engine: "git", Revision: "cccccccc"}
+	if _, err := secondRepository.Propose(ctx, conflictingProposal); !errors.Is(err, intent.ErrIdempotencyConflict) {
+		t.Fatalf("conflicting proposal retry error = %v, want ErrIdempotencyConflict", err)
+	}
+
+	storedIntent, found, err := secondLedger.CurrentIntent(ctx)
+	if err != nil {
+		t.Fatalf("read stored current intent: %v", err)
+	}
+	if !found || storedIntent != promoted.Intent {
+		t.Fatalf("stored current intent = %#v, %t; want %#v, true", storedIntent, found, promoted.Intent)
+	}
+	storedVersion, found, err := secondLedger.Version(ctx, proposed.Version.ID)
+	if err != nil {
+		t.Fatalf("read stored version: %v", err)
+	}
+	if !found || storedVersion != proposed.Version {
+		t.Fatalf("stored version = %#v, %t; want %#v, true", storedVersion, found, proposed.Version)
+	}
+	storedProposal, found, err := secondLedger.ProposalByIdempotencyKey(ctx, proposal.IdempotencyKey)
+	if err != nil {
+		t.Fatalf("read stored idempotent proposal: %v", err)
+	}
+	if !found || storedProposal != proposed {
+		t.Fatalf("stored proposal = %#v, %t; want %#v, true", storedProposal, found, proposed)
+	}
+}
+
+func TestLedgerRecoversIncompleteFinalRecord(t *testing.T) {
+	ctx := context.Background()
+	journalPath := filepath.Join(t.TempDir(), "intent.journal")
+	ledger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("open ledger: %v", err)
+	}
+	initial := intent.Revision{
+		ID:      "intent_initial",
+		Content: intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"},
+	}
+	if err := ledger.Initialize(ctx, initial); err != nil {
+		t.Fatalf("initialize ledger: %v", err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatalf("close ledger: %v", err)
+	}
+	file, err := os.OpenFile(journalPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open journal tail: %v", err)
+	}
+	if _, err := file.WriteString(`{"format":1,"kind":"proposal_recorded"`); err != nil {
+		t.Fatalf("write incomplete record: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close journal tail: %v", err)
+	}
+
+	reopened, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("reopen ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	current, found, err := reopened.CurrentIntent(ctx)
+	if err != nil {
+		t.Fatalf("read recovered current intent: %v", err)
+	}
+	if !found || current != initial {
+		t.Fatalf("recovered current intent = %#v, %t; want %#v, true", current, found, initial)
+	}
+}
+
+func TestLedgerAllowsOnlyOneWriter(t *testing.T) {
+	journalPath := filepath.Join(t.TempDir(), "intent.journal")
+	first, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("open first ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	if second, err := intentfs.Open(journalPath); err == nil {
+		_ = second.Close()
+		t.Fatal("opened a second writer for the same journal")
+	}
+}
+
+func TestLedgerRejectsTrailingDataAfterACompleteRecord(t *testing.T) {
+	ctx := context.Background()
+	journalPath := filepath.Join(t.TempDir(), "intent.journal")
+	ledger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("open ledger: %v", err)
+	}
+	if err := ledger.Initialize(ctx, intent.Revision{
+		ID:      "intent_initial",
+		Content: intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"},
+	}); err != nil {
+		t.Fatalf("initialize ledger: %v", err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatalf("close ledger: %v", err)
+	}
+	record, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	record = bytes.TrimSuffix(record, []byte{'\n'})
+	corrupt := append(append(append([]byte(nil), record...), ' '), record...)
+	corrupt = append(corrupt, '\n')
+	if err := os.WriteFile(journalPath, corrupt, 0o600); err != nil {
+		t.Fatalf("write corrupt journal: %v", err)
+	}
+	if reopened, err := intentfs.Open(journalPath); err == nil {
+		_ = reopened.Close()
+		t.Fatal("opened journal with trailing data after a complete record")
+	}
+}
+
+type recordingAdmission struct {
+	admissions []intent.VersionID
+}
+
+func (admission *recordingAdmission) Admit(_ context.Context, versionID intent.VersionID, _ intent.ContentRef) error {
+	admission.admissions = append(admission.admissions, versionID)
+	return nil
+}
+
+type recordingProjection struct{}
+
+func (*recordingProjection) Advance(_ context.Context, _, _ intent.ContentRef) error {
+	return nil
+}

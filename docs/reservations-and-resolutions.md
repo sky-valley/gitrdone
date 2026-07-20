@@ -559,3 +559,51 @@ This resolution does not yet settle:
 - whether changes to governing files always trigger human review;
 - whether an in-progress judgement keeps its original governing intent or re-triages when canonical intent changes;
 - how the first canonical intent is bootstrapped before governing files exist.
+
+## Resolution 006: prove durability with a local journal first
+
+**Status:** Agreed for the current implementation stage
+
+### Reservation
+
+The first operational plan called for a Postgres ledger. Postgres will eventually be useful for concurrent servers, querying across repositories, and operational scale, but introducing it before proving the repository mechanics would mix infrastructure work with the harder product question: whether intent, proposals, promotions, and retries form a truthful durable model.
+
+Using mutable JSON files instead would be superficially simpler but would force gitrdone to coordinate atomic updates across several files and recreate database transactions badly.
+
+### Resolution
+
+The first durable ledger is one append-only filesystem journal per repository, behind a repository-owned ledger interface.
+
+The journal records source events for:
+
+- repository initialization and the first intent revision;
+- proposals, including their change, version, and idempotency key;
+- promotions and the successor intent revision.
+
+Records are ordered, appended, and synced before they are treated as durable. Repository state is reconstructed by replay rather than by trusting a mutable snapshot. An incomplete final record may be removed during restart recovery; malformed complete records fail closed.
+
+The current operating constraint is one journal writer per repository. The filesystem adapter enforces that constraint with an exclusive lock.
+
+The ledger interface belongs to the intent domain. It exposes narrow queries and durable operations rather than a complete replay snapshot. The filesystem adapter may replay the journal into private indexes; a future Postgres adapter may answer the same queries directly. Neither adapter's hydration or storage representation belongs in the shared contract.
+
+The filesystem format is an adapter, not part of the product identity. A future Postgres implementation should preserve the domain contract rather than leak relational storage concepts into repository judgement.
+
+### Migration triggers
+
+Move to a transactional service such as Postgres when the product needs one or more of:
+
+- multiple gitrdone processes writing the same repository;
+- cross-repository querying or coordination;
+- operational indexing beyond replaying a repository-local history;
+- volume at which journal replay or compaction becomes an observed problem;
+- infrastructure guarantees that a local filesystem cannot honestly provide.
+
+Do not migrate merely because a database is expected eventually.
+
+### Remaining edge
+
+The journal makes completed operations durable, but it does not yet make a Git ref update and a ledger append atomic. In particular, the process may fail after trunk advances but before the promotion record is durable. The next crash-reconciliation slice must introduce a prepared promotion record and safely finish or classify incomplete promotions after restart.
+
+### Agreed ownership rule
+
+> Prove repository durability with the smallest honest local ledger; change the storage adapter when observed coordination and scale require it.

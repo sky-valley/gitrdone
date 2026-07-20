@@ -21,9 +21,10 @@ func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 	initialIntent := repository.CurrentIntent()
 
 	proposed, err := repository.Propose(ctx, intent.Proposal{
-		BaseIntent: initialIntent.ID,
-		Content:    proposedContent,
-		Producer:   "ion",
+		IdempotencyKey: "request-1",
+		BaseIntent:     initialIntent.ID,
+		Content:        proposedContent,
+		Producer:       "ion",
 	})
 	if err != nil {
 		t.Fatalf("propose: %v", err)
@@ -117,9 +118,10 @@ func TestRepositoryHoldsStaleProposalInsteadOfAdvancingIntent(t *testing.T) {
 	staleIntent := repository.CurrentIntent()
 
 	first, err := repository.Propose(ctx, intent.Proposal{
-		BaseIntent: staleIntent.ID,
-		Content:    intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
-		Producer:   "ion",
+		IdempotencyKey: "request-1",
+		BaseIntent:     staleIntent.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
 	})
 	if err != nil {
 		t.Fatalf("first propose: %v", err)
@@ -134,9 +136,10 @@ func TestRepositoryHoldsStaleProposalInsteadOfAdvancingIntent(t *testing.T) {
 	currentIntent := repository.CurrentIntent()
 
 	stale, err := repository.Propose(ctx, intent.Proposal{
-		BaseIntent: staleIntent.ID,
-		Content:    intent.ContentRef{Engine: "git", Revision: "cccccccc"},
-		Producer:   "ion",
+		IdempotencyKey: "request-2",
+		BaseIntent:     staleIntent.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
 	})
 	if err != nil {
 		t.Fatalf("stale propose: %v", err)
@@ -169,9 +172,10 @@ func TestRepositoryKeepsProposalWhenProjectionFails(t *testing.T) {
 	initialIntent := repository.CurrentIntent()
 
 	proposed, err := repository.Propose(ctx, intent.Proposal{
-		BaseIntent: initialIntent.ID,
-		Content:    intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
-		Producer:   "ion",
+		IdempotencyKey: "request-1",
+		BaseIntent:     initialIntent.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
 	})
 	if err != nil {
 		t.Fatalf("propose: %v", err)
@@ -211,9 +215,10 @@ func TestRepositoryDoesNotRecordContentWhenAdmissionFails(t *testing.T) {
 	initialIntent := repository.CurrentIntent()
 
 	_, err = repository.Propose(ctx, intent.Proposal{
-		BaseIntent: initialIntent.ID,
-		Content:    intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
-		Producer:   "ion",
+		IdempotencyKey: "request-1",
+		BaseIntent:     initialIntent.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
 	})
 	if !errors.Is(err, admissionErr) {
 		t.Fatalf("propose error = %v, want admission error", err)

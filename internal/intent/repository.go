@@ -12,6 +12,7 @@ import (
 var ErrIntentAdvanced = errors.New("canonical intent advanced")
 var ErrIntentNotFound = errors.New("intent not found")
 var ErrVersionNotFound = errors.New("change version not found")
+var ErrIdempotencyConflict = errors.New("idempotency key already used for a different proposal")
 
 type ContentRef struct {
 	Engine   string
@@ -52,9 +53,10 @@ type Promotion struct {
 }
 
 type Proposal struct {
-	BaseIntent RevisionID
-	Content    ContentRef
-	Producer   string
+	IdempotencyKey string
+	BaseIntent     RevisionID
+	Content        ContentRef
+	Producer       string
 }
 
 type Proposed struct {
@@ -81,18 +83,25 @@ type TrunkProjection interface {
 }
 
 type Repository struct {
+	proposalMu  sync.Mutex
 	promotionMu sync.Mutex
 	stateMu     sync.RWMutex
 	current     Revision
 	admission   ContentAdmission
 	projection  TrunkProjection
-	revisions   map[RevisionID]Revision
-	versions    map[VersionID]Version
+	ledger      Ledger
 }
 
 func NewRepository(initial ContentRef, admission ContentAdmission, projection TrunkProjection) (*Repository, error) {
+	return OpenRepository(context.Background(), initial, &transientLedger{}, admission, projection)
+}
+
+func OpenRepository(ctx context.Context, initial ContentRef, ledger Ledger, admission ContentAdmission, projection TrunkProjection) (*Repository, error) {
 	if initial.Engine == "" || initial.Revision == "" {
 		return nil, errors.New("initial content reference requires engine and revision")
+	}
+	if ledger == nil {
+		return nil, errors.New("intent ledger is required")
 	}
 	if admission == nil {
 		return nil, errors.New("content admission is required")
@@ -101,23 +110,31 @@ func NewRepository(initial ContentRef, admission ContentAdmission, projection Tr
 		return nil, errors.New("trunk projection is required")
 	}
 
-	initialID, err := newID("intent")
+	current, found, err := ledger.CurrentIntent(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("create initial intent id: %w", err)
+		return nil, fmt.Errorf("read current intent: %w", err)
 	}
-	initialIntent := Revision{
-		ID:      RevisionID(initialID),
-		Content: initial,
+	if !found {
+		initialID, err := newID("intent")
+		if err != nil {
+			return nil, fmt.Errorf("create initial intent id: %w", err)
+		}
+		current = Revision{
+			ID:      RevisionID(initialID),
+			Content: initial,
+		}
+		if err := ledger.Initialize(ctx, current); err != nil {
+			return nil, fmt.Errorf("initialize intent ledger: %w", err)
+		}
 	}
-	return &Repository{
-		current:    initialIntent,
+
+	repository := &Repository{
+		current:    current,
 		admission:  admission,
 		projection: projection,
-		revisions: map[RevisionID]Revision{
-			initialIntent.ID: initialIntent,
-		},
-		versions: make(map[VersionID]Version),
-	}, nil
+		ledger:     ledger,
+	}
+	return repository, nil
 }
 
 func (repository *Repository) CurrentIntent() Revision {
@@ -127,11 +144,35 @@ func (repository *Repository) CurrentIntent() Revision {
 }
 
 func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (Proposed, error) {
+	if proposal.IdempotencyKey == "" {
+		return Proposed{}, errors.New("proposal idempotency key is required")
+	}
 	if proposal.Content.Engine == "" || proposal.Content.Revision == "" {
 		return Proposed{}, errors.New("proposed content reference requires engine and revision")
 	}
 	if proposal.Producer == "" {
 		return Proposed{}, errors.New("proposal producer is required")
+	}
+
+	repository.proposalMu.Lock()
+	defer repository.proposalMu.Unlock()
+
+	existing, found, err := repository.ledger.ProposalByIdempotencyKey(ctx, proposal.IdempotencyKey)
+	if err != nil {
+		return Proposed{}, fmt.Errorf("read proposal idempotency record: %w", err)
+	}
+	if found {
+		if existing.Version.BaseIntent != proposal.BaseIntent || existing.Version.Content != proposal.Content || existing.Version.Producer != proposal.Producer {
+			return Proposed{}, ErrIdempotencyConflict
+		}
+		return existing, nil
+	}
+	_, found, err = repository.ledger.Revision(ctx, proposal.BaseIntent)
+	if err != nil {
+		return Proposed{}, fmt.Errorf("read proposal base intent: %w", err)
+	}
+	if !found {
+		return Proposed{}, ErrIntentNotFound
 	}
 
 	changeID, err := newID("change")
@@ -141,13 +182,6 @@ func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (P
 	versionID, err := newID("version")
 	if err != nil {
 		return Proposed{}, fmt.Errorf("create version id: %w", err)
-	}
-
-	repository.stateMu.RLock()
-	_, baseExists := repository.revisions[proposal.BaseIntent]
-	repository.stateMu.RUnlock()
-	if !baseExists {
-		return Proposed{}, ErrIntentNotFound
 	}
 
 	version := Version{
@@ -160,11 +194,10 @@ func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (P
 	if err := repository.admission.Admit(ctx, version.ID, version.Content); err != nil {
 		return Proposed{}, fmt.Errorf("admit proposed content: %w", err)
 	}
-
-	repository.stateMu.Lock()
-	defer repository.stateMu.Unlock()
 	change := Change{ID: version.ChangeID}
-	repository.versions[version.ID] = version
+	if err := repository.ledger.RecordProposal(ctx, proposal.IdempotencyKey, change, version); err != nil {
+		return Proposed{}, fmt.Errorf("record proposal: %w", err)
+	}
 
 	return Proposed{Change: change, Version: version}, nil
 }
@@ -173,12 +206,19 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 	repository.promotionMu.Lock()
 	defer repository.promotionMu.Unlock()
 
-	repository.stateMu.RLock()
-	version, ok := repository.versions[request.VersionID]
-	current := repository.current
-	repository.stateMu.RUnlock()
-	if !ok {
+	version, found, err := repository.ledger.Version(ctx, request.VersionID)
+	if err != nil {
+		return Promoted{}, fmt.Errorf("read change version: %w", err)
+	}
+	if !found {
 		return Promoted{}, ErrVersionNotFound
+	}
+	current, found, err := repository.ledger.CurrentIntent(ctx)
+	if err != nil {
+		return Promoted{}, fmt.Errorf("read current intent: %w", err)
+	}
+	if !found {
+		return Promoted{}, errors.New("intent ledger is not initialized")
 	}
 	if request.ExpectedIntent != current.ID || version.BaseIntent != current.ID {
 		return Promoted{}, ErrIntentAdvanced
@@ -208,10 +248,12 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 	if err := repository.projection.Advance(ctx, current.Content, nextIntent.Content); err != nil {
 		return Promoted{}, fmt.Errorf("advance trunk projection: %w", err)
 	}
+	if err := repository.ledger.RecordPromotion(ctx, promotion, nextIntent); err != nil {
+		return Promoted{}, fmt.Errorf("record promotion: %w", err)
+	}
 
 	repository.stateMu.Lock()
 	repository.current = nextIntent
-	repository.revisions[nextIntent.ID] = nextIntent
 	repository.stateMu.Unlock()
 
 	return Promoted{

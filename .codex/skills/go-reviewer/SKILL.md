@@ -33,19 +33,22 @@ When no evidence packet is provided, gather only the minimum repo context needed
 4. Check Go shape and idioms.
    Review package ownership, names, exported symbols, interfaces, DTOs, error handling, context propagation, cancellation, goroutine lifetimes, resource cleanup, nil/zero-value behavior, and table-driven tests.
 
-5. Check file and package responsibility growth.
+5. Test adapter substitution at new persistence and service boundaries.
+   Identify the consumer and every intended or explicitly anticipated implementation. Walk each interface method from the perspective of at least one materially different adapter, such as filesystem versus Postgres or in-process versus remote. Flag whole-state loads, provider-owned snapshots, table-shaped DTOs, startup work proportional to complete history, and methods that exist only because the first adapter finds them convenient. Do not accept “another adapter can implement this interface” without checking what that implementation would actually have to do.
+
+6. Check file and package responsibility growth.
    When a diff adds meaningful logic to an already central or large file, inspect the file outline and ask whether the file still has one coherent job. Flag accumulated bloat when unrelated responsibilities are being layered into one file, even if the package boundary is still correct. Prefer narrow same-package file splits by responsibility before suggesting new packages.
 
-6. Route boundary-heavy changes through `go-boundary-reviewer`.
+7. Route boundary-heavy changes through `go-boundary-reviewer`.
    If the diff adds or moves packages, commands, subcommands, services, maintenance jobs, exported APIs, interfaces, config, persistence records, or transport code, use the `go-boundary-reviewer` skill and include its boundary verdicts in the review.
 
-7. Check tests for truthfulness and shape.
+8. Check tests for truthfulness and shape.
    Prefer tests that verify outputs, side effects, wire details, filesystem contents, or error behavior. Flag tests that only prove a stub was called, duplicate implementation logic, or would pass if the feature were deleted. When a test file covers several unrelated behaviors, recommend splitting tests by behavior or collaborator while keeping assertions contract-focused.
 
-8. Separate required fixes from taste.
+9. Separate required fixes from taste.
    Do not bury blocking correctness findings under naming or style comments. Mark non-critical polish clearly.
 
-9. Do not implement unless asked.
+10. Do not implement unless asked.
    Review by default. If the user asks for fixes, keep edits scoped to the reviewed issue and preserve unrelated changes.
 
 ## Review Priorities
@@ -62,6 +65,7 @@ Findings should be ordered by severity:
 ## Go-Specific Checks
 
 - Keep interfaces small and consumer-shaped.
+- Treat bulk `Load`, `Snapshot`, `State`, and `ListAll` methods on persistence interfaces as boundary tripwires. Require evidence that the consumer needs the complete dataset rather than adapter-specific replay or hydration.
 - Avoid provider abstractions until a second provider is real.
 - Let package names carry context; avoid exported name stutter.
 - Prefer concrete types at construction boundaries unless an interface is useful to the caller.
