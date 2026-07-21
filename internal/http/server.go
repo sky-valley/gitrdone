@@ -42,6 +42,7 @@ func NewServerWithStores(config Config, repos repoStore, idempotency idempotency
 		GitLFS:          gitLFSHandler(repos, newFilesystemLFSObjectStore(config.StorageRoot), config.MaxLFSObjectBytes),
 		GitShowDiff:     gitDiffHandler(repos, execGitDiffBackend{}, gitDiffShow),
 		GitCompareDiff:  gitDiffHandler(repos, execGitDiffBackend{}, gitDiffCompare),
+		GitRawFile:      gitRawHandler(repos, execGitRawBackend{}),
 	})
 	return accessLog(config.AccessLog, config.TrustedProxyPrefixes, mux)
 }

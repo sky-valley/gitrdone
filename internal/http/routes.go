@@ -18,6 +18,7 @@ type Handlers struct {
 	GitLFS          http.Handler
 	GitShowDiff     http.Handler
 	GitCompareDiff  http.Handler
+	GitRawFile      http.Handler
 }
 
 func NewMux(h Handlers) *http.ServeMux {
@@ -61,6 +62,7 @@ func NewMux(h Handlers) *http.ServeMux {
 	// routes these here rather than into the git smart-HTTP transport.
 	mux.Handle("GET /git/repos/{repoGitID}/show/{spec}", gitRepoRoute(h.GitShowDiff))
 	mux.Handle("GET /git/repos/{repoGitID}/compare/{spec}", gitRepoRoute(h.GitCompareDiff))
+	mux.Handle("GET /git/repos/{repoGitID}/raw/{spec...}", gitRepoRoute(h.GitRawFile))
 
 	return mux
 }
