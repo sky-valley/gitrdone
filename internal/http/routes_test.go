@@ -45,6 +45,12 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 			wantRepoID: "repo_123",
 		},
 		{
+			name:       "bootstrap intent",
+			method:     http.MethodPut,
+			target:     "/v1/repos/repo_123/intent",
+			wantRepoID: "repo_123",
+		},
+		{
 			name:       "propose change",
 			method:     http.MethodPost,
 			target:     "/v1/repos/repo_123/proposals",
@@ -91,6 +97,7 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 				ListRepoTokens:  handler,
 				RevokeRepoToken: handler,
 				CurrentIntent:   handler,
+				BootstrapIntent: handler,
 				ProposeIntent:   handler,
 				GetChange:       handler,
 				ListVersions:    handler,

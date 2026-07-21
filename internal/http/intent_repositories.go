@@ -60,6 +60,57 @@ func (registry *intentRepositoryRegistry) Resolve(ctx context.Context, controlRe
 	if err != nil {
 		return nil, fmt.Errorf("load repo metadata: %w", err)
 	}
+	return registry.openLocked(ctx, repo)
+}
+
+func (registry *intentRepositoryRegistry) Bootstrap(ctx context.Context, controlRepoID string, content intent.ContentRef) (intent.Revision, error) {
+	repoID, ok := parseRepoControlID(controlRepoID)
+	if !ok {
+		return intent.Revision{}, intentservice.ErrRepositoryNotFound
+	}
+
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if registry.closed {
+		return intent.Revision{}, errors.New("intent repository registry is closed")
+	}
+	if entry, found := registry.entries[repoID]; found {
+		current := entry.repository.CurrentIntent()
+		if current.Content == content {
+			return current, nil
+		}
+		return intent.Revision{}, intentservice.ErrRepositoryAlreadyInitialized
+	}
+
+	repo, err := registry.repos.GetRepo(ctx, getRepoInput{ID: repoID})
+	if errors.Is(err, errRepoNotFound) {
+		return intent.Revision{}, intentservice.ErrRepositoryNotFound
+	}
+	if err != nil {
+		return intent.Revision{}, fmt.Errorf("load repo metadata: %w", err)
+	}
+	gitDir, err := registry.gitStorage.BareRepoPath(ctx, repo.ID)
+	if err != nil {
+		return intent.Revision{}, fmt.Errorf("locate bare repo: %w", err)
+	}
+	gitRepository, err := gitintent.OpenRepository(ctx, gitDir, "refs/heads/"+repo.DefaultBranch)
+	if err != nil {
+		return intent.Revision{}, fmt.Errorf("open git intent repository: %w", err)
+	}
+	if err := gitRepository.Bootstrap(ctx, content); err != nil {
+		if errors.Is(err, gitintent.ErrTrunkAlreadyInitialized) {
+			return intent.Revision{}, intentservice.ErrRepositoryAlreadyInitialized
+		}
+		return intent.Revision{}, fmt.Errorf("bootstrap git intent repository: %w", err)
+	}
+	repository, err := registry.openLocked(ctx, repo)
+	if err != nil {
+		return intent.Revision{}, err
+	}
+	return repository.CurrentIntent(), nil
+}
+
+func (registry *intentRepositoryRegistry) openLocked(ctx context.Context, repo repoRecord) (*intent.Repository, error) {
 	gitDir, err := registry.gitStorage.BareRepoPath(ctx, repo.ID)
 	if err != nil {
 		return nil, fmt.Errorf("locate bare repo: %w", err)

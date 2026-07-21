@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/sky-valley/gitrdone/internal/gitintent"
 )
 
 const maxGitBackendStderrBytes = 64 * 1024
@@ -70,6 +72,19 @@ func gitHTTPBackendEnv(r *http.Request, grant gitAccessGrant) []string {
 		"REQUEST_METHOD="+r.Method,
 		"REMOTE_USER="+gitRemoteUser(grant),
 	)
+	if operation, ok := gitOperationFromRequest(r); ok && operation == gitOperationWrite {
+		hiddenRefs := []string{gitintent.ReservedRefNamespace}
+		if grant.CanonicalRef != "" {
+			hiddenRefs = append(hiddenRefs, grant.CanonicalRef)
+		}
+		env = append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(len(hiddenRefs)))
+		for index, ref := range hiddenRefs {
+			env = append(env,
+				"GIT_CONFIG_KEY_"+strconv.Itoa(index)+"=receive.hideRefs",
+				"GIT_CONFIG_VALUE_"+strconv.Itoa(index)+"="+ref,
+			)
+		}
+	}
 	if contentType := r.Header.Get("Content-Type"); contentType != "" {
 		env = append(env, "CONTENT_TYPE="+contentType)
 	}

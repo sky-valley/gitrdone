@@ -234,6 +234,9 @@ func TestMemoryRepoStoreListRevokeAndAuditRepoTokens(t *testing.T) {
 	if grant.Subject != "reader-job" {
 		t.Fatalf("grant subject = %q, want reader-job", grant.Subject)
 	}
+	if grant.CanonicalRef != "refs/heads/main" {
+		t.Fatalf("grant canonical ref = %q, want refs/heads/main", grant.CanonicalRef)
+	}
 	tokens, err = store.ListRepoTokens(context.Background(), listRepoTokensInput{RepoID: repo.ID})
 	if err != nil {
 		t.Fatal(err)

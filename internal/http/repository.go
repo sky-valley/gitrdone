@@ -94,9 +94,10 @@ type authorizeGitAccessInput struct {
 }
 
 type gitAccessGrant struct {
-	RepoID   string
-	RepoPath string
-	Subject  string
+	RepoID       string
+	RepoPath     string
+	Subject      string
+	CanonicalRef string
 }
 
 type repoRecord struct {
@@ -348,9 +349,10 @@ func (store *memoryRepoStore) AuthorizeGitAccess(ctx context.Context, input auth
 	token.LastUsedAt = now
 	store.tokens[token.ID] = token
 	return gitAccessGrant{
-		RepoID:   repo.ID,
-		RepoPath: repoPath,
-		Subject:  token.Subject,
+		RepoID:       repo.ID,
+		RepoPath:     repoPath,
+		Subject:      token.Subject,
+		CanonicalRef: "refs/heads/" + repo.DefaultBranch,
 	}, nil
 }
 

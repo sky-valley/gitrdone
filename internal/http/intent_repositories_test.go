@@ -2,12 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/sky-valley/gitrdone/internal/intent"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
 )
 
@@ -56,6 +58,56 @@ func TestIntentRepositoryRegistryBindsControlRepoToGitAndFilesystemLedger(t *tes
 
 	if _, err := registry.Resolve(ctx, "repo_missing"); err != intentservice.ErrRepositoryNotFound {
 		t.Fatalf("missing repository error = %v, want ErrRepositoryNotFound", err)
+	}
+}
+
+func TestIntentRepositoryRegistryBootstrapSurvivesRestartAndCannotBeReplaced(t *testing.T) {
+	ctx := context.Background()
+	storageRoot := t.TempDir()
+	storage := newFilesystemGitStorage(storageRoot)
+	repos := newMemoryRepoStore(nil)
+	repos.gitStorage = storage
+	repo, err := repos.CreateRepo(ctx, createRepoInput{Namespace: "acme", Name: "bootstrap", DefaultBranch: "main"})
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	gitDir, err := storage.BareRepoPath(ctx, repo.ID)
+	if err != nil {
+		t.Fatalf("bare repo path: %v", err)
+	}
+	initialCommit := seedBareRepo(t, gitDir)
+	runIntentTestGit(t, "--git-dir", gitDir, "update-ref", "refs/candidates/bootstrap", initialCommit)
+	runIntentTestGit(t, "--git-dir", gitDir, "update-ref", "-d", "refs/heads/main")
+	content := intent.ContentRef{Engine: "git", Revision: initialCommit}
+
+	firstRegistry := newIntentRepositoryRegistry(storageRoot, repos, storage)
+	first, err := firstRegistry.Bootstrap(ctx, formatRepoControlID(repo.ID), content)
+	if err != nil {
+		t.Fatalf("bootstrap intent: %v", err)
+	}
+	if err := firstRegistry.Close(); err != nil {
+		t.Fatalf("close first registry: %v", err)
+	}
+
+	restartedRegistry := newIntentRepositoryRegistry(storageRoot, repos, storage)
+	t.Cleanup(func() {
+		if err := restartedRegistry.Close(); err != nil {
+			t.Errorf("close restarted registry: %v", err)
+		}
+	})
+	retried, err := restartedRegistry.Bootstrap(ctx, formatRepoControlID(repo.ID), content)
+	if err != nil {
+		t.Fatalf("retry bootstrap after restart: %v", err)
+	}
+	if retried.ID != first.ID || retried.Content != first.Content {
+		t.Fatalf("retried intent = %#v, want %#v", retried, first)
+	}
+	different := intent.ContentRef{Engine: "git", Revision: strings.Repeat("f", 40)}
+	if _, err := restartedRegistry.Bootstrap(ctx, formatRepoControlID(repo.ID), different); !errors.Is(err, intentservice.ErrRepositoryAlreadyInitialized) {
+		t.Fatalf("replacement bootstrap error = %v, want ErrRepositoryAlreadyInitialized", err)
+	}
+	if got := strings.TrimSpace(runIntentTestGit(t, "--git-dir", gitDir, "rev-parse", "refs/heads/main")); got != initialCommit {
+		t.Fatalf("main after replacement attempt = %q, want %q", got, initialCommit)
 	}
 }
 

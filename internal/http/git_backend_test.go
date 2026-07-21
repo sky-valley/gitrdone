@@ -151,6 +151,39 @@ func TestGitHTTPBackendEnvDoesNotInheritProcessSecrets(t *testing.T) {
 	}
 }
 
+func TestGitHTTPBackendEnvProtectsEngineOwnedRefsOnlyForReceivePack(t *testing.T) {
+	grant := gitAccessGrant{
+		RepoPath:     "/tmp/repos/00000000-0000-4000-8000-000000000001.git",
+		CanonicalRef: "refs/heads/main",
+	}
+
+	receiveRequest := httptest.NewRequest(http.MethodPost, "/git/repos/repo_00000000-0000-4000-8000-000000000001.git/git-receive-pack", nil)
+	receiveRequest.SetPathValue("gitPath", "git-receive-pack")
+	receiveEnv := gitHTTPBackendEnv(receiveRequest, grant)
+	if got := envValueOrEmpty(receiveEnv, "GIT_CONFIG_COUNT"); got != "2" {
+		t.Fatalf("receive-pack GIT_CONFIG_COUNT = %q, want 2", got)
+	}
+	if got := envValueOrEmpty(receiveEnv, "GIT_CONFIG_KEY_0"); got != "receive.hideRefs" {
+		t.Fatalf("receive-pack GIT_CONFIG_KEY_0 = %q, want receive.hideRefs", got)
+	}
+	if got := envValueOrEmpty(receiveEnv, "GIT_CONFIG_VALUE_0"); got != "refs/gitrdone/" {
+		t.Fatalf("receive-pack GIT_CONFIG_VALUE_0 = %q, want refs/gitrdone/", got)
+	}
+	if got := envValueOrEmpty(receiveEnv, "GIT_CONFIG_KEY_1"); got != "receive.hideRefs" {
+		t.Fatalf("receive-pack GIT_CONFIG_KEY_1 = %q, want receive.hideRefs", got)
+	}
+	if got := envValueOrEmpty(receiveEnv, "GIT_CONFIG_VALUE_1"); got != "refs/heads/main" {
+		t.Fatalf("receive-pack GIT_CONFIG_VALUE_1 = %q, want refs/heads/main", got)
+	}
+
+	uploadRequest := httptest.NewRequest(http.MethodPost, "/git/repos/repo_00000000-0000-4000-8000-000000000001.git/git-upload-pack", nil)
+	uploadRequest.SetPathValue("gitPath", "git-upload-pack")
+	uploadEnv := gitHTTPBackendEnv(uploadRequest, grant)
+	if got := envValueOrEmpty(uploadEnv, "GIT_CONFIG_COUNT"); got != "" {
+		t.Fatalf("upload-pack GIT_CONFIG_COUNT = %q, want unset", got)
+	}
+}
+
 func TestRunGitDoesNotInheritProcessSecrets(t *testing.T) {
 	binDir := t.TempDir()
 	fakeGit := filepath.Join(binDir, "git")

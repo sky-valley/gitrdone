@@ -15,15 +15,36 @@ import (
 )
 
 func TestGitSmartHTTPRealGitCommands(t *testing.T) {
-	t.Run("readwrite token can push and read token can clone and fetch", func(t *testing.T) {
+	t.Run("write access accepts candidate refs but cannot move canonical main", func(t *testing.T) {
+		fixture := newGitSmartHTTPFixture(t, "canonical-gate")
+		readwriteToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "readwrite", "ion")
+
+		worktree := newGitWorktree(t, "README.md", "candidate content\n")
+		remote := fixture.tokenizedGitURL(readwriteToken.Token)
+		requireGitSuccess(t, "add candidate remote", "-C", worktree, "remote", "add", "origin", remote)
+		requireGitSuccess(t, "push candidate", "-C", worktree, "push", "origin", "HEAD:refs/candidates/ion/change")
+		requireGitFailure(t, "push into reserved gitrdone refs", "-C", worktree, "push", "origin", "HEAD:refs/gitrdone/holding/forged")
+		requireGitFailure(t, "push directly to canonical main", "-C", worktree, "push", "origin", "HEAD:main")
+
+		candidate := gitRemoteRef(t, remote, "refs/candidates/ion/change")
+		if want := gitRevParse(t, worktree, "HEAD"); candidate != want {
+			t.Fatalf("candidate ref = %q, want %q", candidate, want)
+		}
+		if main := gitRemoteRef(t, remote, "refs/heads/main"); main != "" {
+			t.Fatalf("canonical main = %q after rejected push, want absent", main)
+		}
+	})
+
+	t.Run("readwrite token can publish and promoted content can be cloned and fetched", func(t *testing.T) {
 		fixture := newGitSmartHTTPFixture(t, "readwrite")
 		readwriteToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "readwrite", "bootstrap-job")
 		readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "reader-job")
 
 		worktree := newGitWorktree(t, "README.md", "first version\n")
 		pushURL := fixture.tokenizedGitURL(readwriteToken.Token)
-		requireGitSuccess(t, "push initial commit", "-C", worktree, "remote", "add", "origin", pushURL)
-		requireGitSuccess(t, "push initial commit", "-C", worktree, "push", "-u", "origin", "main")
+		requireGitSuccess(t, "add origin", "-C", worktree, "remote", "add", "origin", pushURL)
+		requireGitSuccess(t, "publish initial commit", "-C", worktree, "push", "origin", "HEAD:refs/candidates/bootstrap")
+		initial := bootstrapIntentFixture(t, fixture, gitRevParse(t, worktree, "HEAD"))
 
 		cloneDir := filepath.Join(t.TempDir(), "clone")
 		requireGitSuccess(t, "clone with read token", "clone", "--branch", "main", fixture.tokenizedGitURL(readToken.Token), cloneDir)
@@ -32,7 +53,15 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 		writeGitFile(t, worktree, "README.md", "second version\n")
 		requireGitSuccess(t, "commit update", "-C", worktree, "add", "README.md")
 		requireGitSuccess(t, "commit update", "-C", worktree, "commit", "-m", "update readme")
-		requireGitSuccess(t, "push update", "-C", worktree, "push", "origin", "main")
+		requireGitSuccess(t, "publish update", "-C", worktree, "push", "origin", "HEAD:refs/candidates/readwrite/update")
+		proposedCommit := gitRevParse(t, worktree, "HEAD")
+		proposalBody := fmt.Sprintf(`{"baseIntent":%q,"contentRef":{"engine":"git","revision":%q}}`, initial.ID, proposedCommit)
+		res, body := requestWithHeaders(t, fixture.handler, http.MethodPost, "/v1/repos/"+fixture.repo.ID+"/proposals", map[string]string{
+			"Authorization":   controlAuthorization,
+			"Content-Type":    "application/json",
+			"Idempotency-Key": "smart-http-update",
+		}, proposalBody)
+		requireStatus(t, res, body, http.StatusOK)
 
 		requireGitSuccess(t, "fetch with read token", "-C", cloneDir, "pull", "--ff-only", "origin", "main")
 		assertFileContent(t, filepath.Join(cloneDir, "README.md"), "second version\n")
@@ -44,7 +73,7 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 
 		worktree := newGitWorktree(t, "write.txt", "write scope\n")
 		requireGitSuccess(t, "push with write token", "-C", worktree, "remote", "add", "origin", fixture.tokenizedGitURL(writeToken.Token))
-		requireGitSuccess(t, "push with write token", "-C", worktree, "push", "-u", "origin", "main")
+		requireGitSuccess(t, "push candidate with write token", "-C", worktree, "push", "origin", "HEAD:refs/candidates/writer/change")
 	})
 
 	t.Run("read token cannot push", func(t *testing.T) {
@@ -205,6 +234,41 @@ func requireGitFailure(t *testing.T, description string, args ...string) {
 	if err == nil {
 		t.Fatalf("%s unexpectedly succeeded: git %s\n%s", description, strings.Join(args, " "), output)
 	}
+}
+
+func gitRemoteRef(t *testing.T, remote string, ref string) string {
+	t.Helper()
+
+	output, err := runGitForTest("ls-remote", remote, ref)
+	if err != nil {
+		t.Fatalf("read remote ref %s: %v\n%s", ref, err, output)
+	}
+	fields := strings.Fields(output)
+	if len(fields) == 0 {
+		return ""
+	}
+	if len(fields) != 2 || fields[1] != ref {
+		t.Fatalf("remote ref output for %s = %q", ref, output)
+	}
+	return fields[0]
+}
+
+type bootstrappedIntentFixture struct {
+	ID string `json:"id"`
+}
+
+func bootstrapIntentFixture(t *testing.T, fixture gitSmartHTTPFixture, revision string) bootstrappedIntentFixture {
+	t.Helper()
+
+	body := fmt.Sprintf(`{"contentRef":{"engine":"git","revision":%q}}`, revision)
+	res, responseBody := request(t, fixture.handler, http.MethodPut, "/v1/repos/"+fixture.repo.ID+"/intent", controlAuthorization, "application/json", body)
+	requireStatus(t, res, responseBody, http.StatusOK)
+	var initial bootstrappedIntentFixture
+	decodeJSON(t, res, responseBody, &initial)
+	if initial.ID == "" {
+		t.Fatal("bootstrapped intent id is empty")
+	}
+	return initial
 }
 
 func runGitForTest(args ...string) (string, error) {

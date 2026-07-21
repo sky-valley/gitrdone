@@ -672,6 +672,7 @@ The initial control API is:
 
 ```text
 GET  /v1/repos/{repoID}/intent
+PUT  /v1/repos/{repoID}/intent        # one-time root-intent bootstrap
 POST /v1/repos/{repoID}/proposals
 GET  /v1/repos/{repoID}/changes/{changeID}
 GET  /v1/repos/{repoID}/changes/{changeID}/versions
@@ -701,3 +702,60 @@ This resolution does not yet settle:
 ### Agreed ownership rule
 
 > Proposal admission is durable and stable; judgement and promotion are evolving consequences that must not be baked into the submission transport.
+
+## Resolution 009: external Git writes cannot move canonical trunk
+
+**Status:** Agreed and implemented for the current slice
+
+### Reservation
+
+The existing smart-HTTP server delegated an authorised write directly to Git receive-pack. A valid repo write token could therefore move the default branch without creating a change version, invoking judgement, recording a promotion, or advancing the intent ledger. Git's transport semantics had become an accidental second authority over canonical intent.
+
+Rejecting that bypass with candidate refs plus a separate proposal request introduces its own risk: temporary Git adapter plumbing could fossilize into the product workflow. Ref names could be mistaken for change identity, ref existence for holding state, or a two-step “push here, then call this API” ritual for the native experience.
+
+New repositories also need one explicit root-of-trust operation before any accepted intent exists to govern proposals.
+
+### Resolution
+
+For the current slice, the external Git adapter configures each receive-pack process to reject updates to the repository's canonical branch. This protection is request-scoped to the external transport. Internal promotion still advances the trunk projection through the prepared compare-and-swap protocol from Resolution 007.
+
+External Git writes may publish content to noncanonical refs such as `refs/candidates/...`. Those refs make Git objects addressable to the engine; they do not create changes, establish identity, represent holding lifecycle, or authorise promotion.
+
+The temporary operational sequence is:
+
+```text
+git push <candidate ref>       # transport stores content
+propose(baseIntent, contentRef) # native domain admits a change version
+judge                          # currently approve-all
+promote                        # only this moves canonical trunk
+```
+
+The root intent is the one exception because no prior accepted intent exists. A trusted control caller performs an idempotent `PUT /v1/repos/{repoID}/intent` with an already available immutable content reference:
+
+- if trunk is absent, the operation establishes the first intent;
+- retrying the same content returns the same intent;
+- attempting to bootstrap different content after initialization returns a conflict and cannot move trunk;
+- unavailable or engine-incompatible content is rejected.
+
+Bootstrap is administrative root-of-trust establishment, not an alternate promotion endpoint.
+
+### Adapter boundary
+
+Candidate ref names are not change IDs, workstream IDs, or idempotency keys. Their namespace, retention, and eventual removal remain Git-adapter concerns. The native proposal operation accepts an engine-neutral immutable content reference and does not know which candidate ref made that content available.
+
+The native proposal API is durable. Requiring users or clients to coordinate a candidate-ref push with a separate API call is not. A future receive-pack proxy, native client, jj adapter, or other transport may collapse storage and proposal admission into one honest interaction without changing the intent domain.
+
+This slice does not decide whether the eventual Git UX permits typing `git push origin main`, uses a configured submission ref, or requires richer tooling. It establishes the invariant that the requested Git ref cannot itself determine acceptance.
+
+### Remaining edges
+
+- how candidate refs are named, expired, and garbage-collected;
+- whether candidate refs should be hidden after admission;
+- how a future Git adapter maps one multi-ref push to one or more proposals;
+- what exact status an eventual receive-pack proxy reports while judgement is pending;
+- how bootstrap authority and provenance become more granular than the current shared control token;
+- whether repository creation should eventually establish a server-defined empty root intent instead of using a separate bootstrap operation.
+
+### Agreed ownership rule
+
+> External transports may make content available and request admission. Only repository promotion may advance accepted intent and its trunk projection.

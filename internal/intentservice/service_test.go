@@ -54,6 +54,14 @@ func (resolver staticResolver) Resolve(context.Context, string) (intentservice.R
 	return resolver.repository, nil
 }
 
+func (resolver staticResolver) Bootstrap(_ context.Context, _ string, content intent.ContentRef) (intent.Revision, error) {
+	current := resolver.repository.CurrentIntent()
+	if current.Content != content {
+		return intent.Revision{}, intentservice.ErrRepositoryAlreadyInitialized
+	}
+	return current, nil
+}
+
 type acceptingAdmission struct{}
 
 func (acceptingAdmission) Admit(context.Context, intent.VersionID, intent.ContentRef) error {

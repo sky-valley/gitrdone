@@ -10,6 +10,7 @@ import (
 )
 
 var ErrRepositoryNotFound = errors.New("repository not found")
+var ErrRepositoryAlreadyInitialized = errors.New("repository intent is already initialized")
 
 type Repository interface {
 	CurrentIntent() intent.Revision
@@ -19,8 +20,9 @@ type Repository interface {
 	Versions(ctx context.Context, query intent.VersionQuery) (intent.VersionPage, error)
 }
 
-type RepositoryResolver interface {
+type Repositories interface {
 	Resolve(ctx context.Context, repoID string) (Repository, error)
+	Bootstrap(ctx context.Context, repoID string, content intent.ContentRef) (intent.Revision, error)
 }
 
 type Proposal struct {
@@ -35,11 +37,11 @@ type Admission struct {
 }
 
 type Service struct {
-	repositories RepositoryResolver
+	repositories Repositories
 	producer     string
 }
 
-func New(repositories RepositoryResolver, producer string) *Service {
+func New(repositories Repositories, producer string) *Service {
 	return &Service{repositories: repositories, producer: strings.TrimSpace(producer)}
 }
 
@@ -49,6 +51,10 @@ func (service *Service) CurrentIntent(ctx context.Context, repoID string) (inten
 		return intent.Revision{}, err
 	}
 	return repository.CurrentIntent(), nil
+}
+
+func (service *Service) Bootstrap(ctx context.Context, repoID string, content intent.ContentRef) (intent.Revision, error) {
+	return service.repositories.Bootstrap(ctx, repoID, content)
 }
 
 func (service *Service) Propose(ctx context.Context, repoID string, proposal Proposal) (Admission, error) {

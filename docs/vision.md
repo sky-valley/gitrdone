@@ -307,6 +307,8 @@ In the native model, proposing work and moving canonical trunk are different ope
 
 Candidate approaches include a configured submission ref, a receive proxy with explicit semantics, a thin client, or a reduced Git-compatible workflow. The right answer is the one that produces the least surprising honest experience while preserving repository judgement. “Push normally” is an experience to prove with client transcripts, not an assumption that gets to distort the native model.
 
+The current implementation uses a reversible reduced-workflow experiment: external Git receive-pack may upload candidate refs but may not update canonical trunk. A trusted one-time bootstrap establishes the root intent; later trunk movement occurs only through promotion. Candidate refs are adapter storage, not changes, holding state, workstreams, or durable identity. This experiment deliberately postpones the final `git push main` UX decision without allowing Git ref semantics to overtake repository judgement.
+
 ### Server-side rewriting and local descendants
 
 The repository can only rewrite descendants it knows about. A developer may have unpublished plain-Git work based on an earlier submitted version. That work cannot be transparently auto-rebased by the server.

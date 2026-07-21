@@ -101,6 +101,33 @@ func TestRepositoryRejectsContentFromAnotherEngine(t *testing.T) {
 	}
 }
 
+func TestRepositoryBootstrapsTrunkExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	fixture := newGitFixture(t)
+	runGit(t, "--git-dir", fixture.gitDir, "update-ref", "-d", "refs/heads/main")
+	repository, err := gitintent.OpenRepository(ctx, fixture.gitDir, "refs/heads/main")
+	if err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	initial := intent.ContentRef{Engine: "git", Revision: fixture.initial}
+
+	if err := repository.Bootstrap(ctx, initial); err != nil {
+		t.Fatalf("bootstrap trunk: %v", err)
+	}
+	if err := repository.Bootstrap(ctx, initial); err != nil {
+		t.Fatalf("retry same bootstrap: %v", err)
+	}
+	if err := repository.Bootstrap(ctx, intent.ContentRef{Engine: "git", Revision: fixture.proposed}); !errors.Is(err, gitintent.ErrTrunkAlreadyInitialized) {
+		t.Fatalf("different bootstrap error = %v, want ErrTrunkAlreadyInitialized", err)
+	}
+	if err := repository.Bootstrap(ctx, intent.ContentRef{Engine: "git", Revision: strings.Repeat("f", 40)}); !errors.Is(err, gitintent.ErrTrunkAlreadyInitialized) {
+		t.Fatalf("unavailable second bootstrap error = %v, want ErrTrunkAlreadyInitialized", err)
+	}
+	if got := gitOutput(t, "--git-dir", fixture.gitDir, "rev-parse", "refs/heads/main"); got != fixture.initial {
+		t.Fatalf("trunk after rejected bootstrap = %q, want %q", got, fixture.initial)
+	}
+}
+
 type gitFixture struct {
 	gitDir   string
 	initial  string

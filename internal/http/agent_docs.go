@@ -75,6 +75,8 @@ Normal Git clients should use Basic auth with username x-access-token and a repo
 
 Read the repository's currently accepted content with GET /v1/repos/{repoID}/intent.
 
+For a new repository only, publish the initial Git commit to a noncanonical ref, then establish root intent with PUT /v1/repos/{repoID}/intent using the control bearer token. Retrying the same content is idempotent. Different content is rejected after initialization.
+
 Propose an immutable repository state with POST /v1/repos/{repoID}/proposals. Idempotency-Key is required for proposals and must identify the same logical proposal on every retry. The request body is:
 
 `+"```json"+`
@@ -138,6 +140,7 @@ Control API for trusted services:
 - POST /v1/repos/{repoID}/tokens/{tokenID}/revoke
 - POST /v1/repos/{repoID}/archive
 - GET /v1/repos/{repoID}/intent
+- PUT /v1/repos/{repoID}/intent
 - POST /v1/repos/{repoID}/proposals
 - GET /v1/repos/{repoID}/changes/{changeID}
 - GET /v1/repos/{repoID}/changes/{changeID}/versions
@@ -168,13 +171,13 @@ Diff revisions must be lowercase hex object IDs, full or abbreviated from 7 to 6
 
 ## Git command use
 
-Prefer ordinary Git commands over handcrafted protocol requests:
+The current Git adapter rejects external updates to the canonical branch. Publish immutable content to a noncanonical candidate ref, then use the native proposal API. Candidate ref names are temporary adapter storage, not change identity or holding state.
 
 `+"```bash"+`
 git clone <gitUrl>
 git fetch
 git pull
-git push origin main
+git push origin HEAD:refs/candidates/<temporary-name>
 `+"```"+`
 
 The canonical Git remote URL shape is:
@@ -220,6 +223,7 @@ Idempotency-Key is required on POST /v1/repos/{repoID}/proposals. A successful p
 - [Repo tokens](%[1]s/v1/repos/{repoID}/tokens): POST to create; GET to list metadata with control bearer token.
 - [Revoke repo token](%[1]s/v1/repos/{repoID}/tokens/{tokenID}/revoke): POST with control bearer token.
 - [Current intent](%[1]s/v1/repos/{repoID}/intent): GET the accepted repository content with the control bearer token.
+- [Bootstrap intent](%[1]s/v1/repos/{repoID}/intent): PUT the first immutable content reference once with the control bearer token.
 - [Propose intent](%[1]s/v1/repos/{repoID}/proposals): POST a base intent and immutable content reference with Idempotency-Key.
 - [Inspect changes](%[1]s/v1/repos/{repoID}/changes/{changeID}): GET a change and its bounded version history.
 - [Git smart HTTP and LFS](%[1]s/git/repos/{repoID}.git): Use normal Git commands with repo-scoped tokens.

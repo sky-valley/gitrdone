@@ -14,10 +14,13 @@ func TestNativeIntentAPIUsesRealGitProjection(t *testing.T) {
 	worktree := newGitWorktree(t, "README.md", "initial\n")
 	remote := fixture.tokenizedGitURL(token.Token)
 	requireGitSuccess(t, "add intent remote", "-C", worktree, "remote", "add", "origin", remote)
-	requireGitSuccess(t, "push initial intent", "-C", worktree, "push", "origin", "HEAD:main")
+	requireGitSuccess(t, "publish initial content", "-C", worktree, "push", "origin", "HEAD:refs/candidates/bootstrap")
 	initialCommit := gitRevParse(t, worktree, "HEAD")
+	bootstrapBody := fmt.Sprintf(`{"contentRef":{"engine":"git","revision":%q}}`, initialCommit)
+	res, body := request(t, fixture.handler, http.MethodPut, "/v1/repos/"+fixture.repo.ID+"/intent", controlAuthorization, "application/json", bootstrapBody)
+	requireStatus(t, res, body, http.StatusOK)
 
-	res, body := request(t, fixture.handler, http.MethodGet, "/v1/repos/"+fixture.repo.ID+"/intent", controlAuthorization, "", "")
+	res, body = request(t, fixture.handler, http.MethodGet, "/v1/repos/"+fixture.repo.ID+"/intent", controlAuthorization, "", "")
 	requireStatus(t, res, body, http.StatusOK)
 	var initial struct {
 		ID         string `json:"id"`
@@ -30,12 +33,28 @@ func TestNativeIntentAPIUsesRealGitProjection(t *testing.T) {
 	if initial.ID == "" || initial.ContentRef.Engine != "git" || initial.ContentRef.Revision != initialCommit {
 		t.Fatalf("initial intent = %#v, want git:%s", initial, initialCommit)
 	}
+	res, body = request(t, fixture.handler, http.MethodPut, "/v1/repos/"+fixture.repo.ID+"/intent", controlAuthorization, "application/json", bootstrapBody)
+	requireStatus(t, res, body, http.StatusOK)
+	var bootstrapRetry struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, res, body, &bootstrapRetry)
+	if bootstrapRetry.ID != initial.ID {
+		t.Fatalf("bootstrap retry intent = %q, want %q", bootstrapRetry.ID, initial.ID)
+	}
 
 	writeGitFile(t, worktree, "README.md", "proposed\n")
 	requireGitSuccess(t, "stage proposed content", "-C", worktree, "add", "README.md")
 	requireGitSuccess(t, "commit proposed content", "-C", worktree, "commit", "-m", "proposed intent")
 	proposedCommit := gitRevParse(t, worktree, "HEAD")
+	requireGitFailure(t, "push proposed content directly to main", "-C", worktree, "push", "origin", "HEAD:main")
 	requireGitSuccess(t, "publish proposed object", "-C", worktree, "push", "origin", "HEAD:refs/candidates/api-test")
+	secondBootstrapBody := fmt.Sprintf(`{"contentRef":{"engine":"git","revision":%q}}`, proposedCommit)
+	res, body = request(t, fixture.handler, http.MethodPut, "/v1/repos/"+fixture.repo.ID+"/intent", controlAuthorization, "application/json", secondBootstrapBody)
+	requireStatus(t, res, body, http.StatusConflict)
+	if main := gitRemoteRef(t, remote, "refs/heads/main"); main != initialCommit {
+		t.Fatalf("main after rejected bypasses = %q, want initial %q", main, initialCommit)
+	}
 
 	proposalBody := fmt.Sprintf(`{"baseIntent":%q,"contentRef":{"engine":"git","revision":%q}}`, initial.ID, proposedCommit)
 	res, body = requestWithHeaders(t, fixture.handler, http.MethodPost, "/v1/repos/"+fixture.repo.ID+"/proposals", map[string]string{

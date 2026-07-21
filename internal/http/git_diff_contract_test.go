@@ -17,13 +17,14 @@ func TestGitDiffRealGitCommands(t *testing.T) {
 	worktree := newGitWorktree(t, "README.md", "first version\n")
 	pushURL := fixture.tokenizedGitURL(readwriteToken.Token)
 	requireGitSuccess(t, "add origin", "-C", worktree, "remote", "add", "origin", pushURL)
-	requireGitSuccess(t, "push base", "-C", worktree, "push", "-u", "origin", "main")
+	requireGitSuccess(t, "publish base", "-C", worktree, "push", "origin", "HEAD:refs/candidates/bootstrap")
 	base := gitRevParse(t, worktree, "HEAD")
+	bootstrapIntentFixture(t, fixture, base)
 
 	writeGitFile(t, worktree, "README.md", "second version\n")
 	requireGitSuccess(t, "stage update", "-C", worktree, "add", "README.md")
 	requireGitSuccess(t, "commit update", "-C", worktree, "commit", "-m", "update readme")
-	requireGitSuccess(t, "push head", "-C", worktree, "push", "origin", "main")
+	requireGitSuccess(t, "publish head", "-C", worktree, "push", "origin", "HEAD:refs/candidates/diff/head")
 	head := gitRevParse(t, worktree, "HEAD")
 
 	const tagMessage = "tag metadata should not be in a patch response"
@@ -64,7 +65,7 @@ func TestGitDiffRealGitCommands(t *testing.T) {
 	requireGitSuccess(t, "commit feature", "-C", worktree, "commit", "-m", "feature branch")
 	requireGitSuccess(t, "return to main", "-C", worktree, "checkout", "main")
 	requireGitSuccess(t, "merge feature", "-C", worktree, "merge", "--no-ff", "feature", "-m", "merge feature")
-	requireGitSuccess(t, "push merge", "-C", worktree, "push", "origin", "main")
+	requireGitSuccess(t, "publish merge", "-C", worktree, "push", "origin", "HEAD:refs/candidates/diff/merge")
 	mergeCommit := gitRevParse(t, worktree, "HEAD")
 
 	t.Run("read token gets a first parent patch for a merge commit via show", func(t *testing.T) {

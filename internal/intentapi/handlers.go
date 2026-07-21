@@ -17,6 +17,7 @@ const defaultVersionPageSize = 50
 
 type Handlers struct {
 	CurrentIntent http.Handler
+	Bootstrap     http.Handler
 	Propose       http.Handler
 	GetChange     http.Handler
 	ListVersions  http.Handler
@@ -25,10 +26,58 @@ type Handlers struct {
 func NewHandlers(service *intentservice.Service) Handlers {
 	return Handlers{
 		CurrentIntent: currentIntentHandler(service),
+		Bootstrap:     bootstrapHandler(service),
 		Propose:       proposeHandler(service),
 		GetChange:     getChangeHandler(service),
 		ListVersions:  listVersionsHandler(service),
 	}
+}
+
+func bootstrapHandler(service *intentservice.Service) http.Handler {
+	type requestBody struct {
+		ContentRef struct {
+			Engine   string `json:"engine"`
+			Revision string `json:"revision"`
+		} `json:"contentRef"`
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body requestBody
+		if err := decodeJSON(w, r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "request body must be valid bootstrap JSON")
+			return
+		}
+		body.ContentRef.Engine = strings.TrimSpace(body.ContentRef.Engine)
+		body.ContentRef.Revision = strings.TrimSpace(body.ContentRef.Revision)
+		if body.ContentRef.Engine == "" || body.ContentRef.Revision == "" {
+			writeError(w, http.StatusBadRequest, "contentRef requires engine and revision")
+			return
+		}
+		repoID, ok := repositoryID(w, r)
+		if !ok {
+			return
+		}
+		initial, err := service.Bootstrap(r.Context(), repoID, intent.ContentRef{
+			Engine:   body.ContentRef.Engine,
+			Revision: body.ContentRef.Revision,
+		})
+		switch {
+		case err == nil:
+		case errors.Is(err, intentservice.ErrRepositoryNotFound):
+			writeError(w, http.StatusNotFound, "repository not found")
+			return
+		case errors.Is(err, intentservice.ErrRepositoryAlreadyInitialized):
+			writeError(w, http.StatusConflict, "repository intent is already initialized")
+			return
+		case errors.Is(err, intent.ErrContentNotAdmissible):
+			writeError(w, http.StatusUnprocessableEntity, "contentRef cannot be admitted by this repository engine")
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, "repository intent could not be initialized")
+			return
+		}
+		writeJSON(w, http.StatusOK, mapIntent(initial))
+	})
 }
 
 type contentRefResponse struct {

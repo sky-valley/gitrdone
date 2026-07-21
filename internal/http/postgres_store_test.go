@@ -97,6 +97,9 @@ func TestPostgresRepoStoreContract(t *testing.T) {
 	if grant.Subject != "reader-job" {
 		t.Fatalf("subject = %q, want reader-job", grant.Subject)
 	}
+	if grant.CanonicalRef != "refs/heads/main" {
+		t.Fatalf("canonical ref = %q, want refs/heads/main", grant.CanonicalRef)
+	}
 
 	tokens, err := store.ListRepoTokens(ctx, listRepoTokensInput{RepoID: repo.ID})
 	if err != nil {

@@ -319,9 +319,10 @@ func (store *postgresRepoStore) AuthorizeGitAccess(ctx context.Context, input au
 		return gitAccessGrant{}, err
 	}
 	return gitAccessGrant{
-		RepoID:   repo.ID,
-		RepoPath: repoPath,
-		Subject:  token.Subject,
+		RepoID:       repo.ID,
+		RepoPath:     repoPath,
+		Subject:      token.Subject,
+		CanonicalRef: "refs/heads/" + repo.DefaultBranch,
 	}, nil
 }
 

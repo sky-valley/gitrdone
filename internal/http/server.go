@@ -55,6 +55,7 @@ func newServerWithStores(config Config, repos repoStore, idempotency idempotency
 		ListRepoTokens:  control(listRepoTokensHandler(repos)),
 		RevokeRepoToken: control(revokeRepoTokenHandler(repos)),
 		CurrentIntent:   control(intentHandlers.CurrentIntent),
+		BootstrapIntent: control(intentHandlers.Bootstrap),
 		ProposeIntent:   control(intentHandlers.Propose),
 		GetChange:       control(intentHandlers.GetChange),
 		ListVersions:    control(intentHandlers.ListVersions),

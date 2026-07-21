@@ -26,7 +26,8 @@ func TestGitLFSRealGitCommands(t *testing.T) {
 	payload := "large artifact bytes stored through git lfs\n"
 	worktree := newGitLFSWorktree(t, payload)
 	requireGitSuccess(t, "add lfs remote", "-C", worktree, "remote", "add", "origin", fixture.tokenizedGitURL(readwriteToken.Token))
-	requireGitSuccess(t, "push lfs repo", "-C", worktree, "push", "-u", "origin", "main")
+	requireGitSuccess(t, "publish lfs repo", "-C", worktree, "push", "origin", "HEAD:refs/candidates/bootstrap")
+	bootstrapIntentFixture(t, fixture, gitRevParse(t, worktree, "HEAD"))
 
 	cloneDir := filepath.Join(t.TempDir(), "clone")
 	requireGitSuccessWithEnv(t, "clone lfs repo without smudge", []string{"GIT_LFS_SKIP_SMUDGE=1"}, "clone", "--branch", "main", fixture.tokenizedGitURL(readToken.Token), cloneDir)

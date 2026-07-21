@@ -13,9 +13,12 @@ import (
 )
 
 const maxGitErrorBytes = 4 * 1024
-const holdingNamespace = "refs/gitrdone/holding"
+const ReservedRefNamespace = "refs/gitrdone/"
+const holdingNamespace = ReservedRefNamespace + "holding"
 
 var fullObjectID = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+var ErrTrunkAlreadyInitialized = errors.New("trunk is already initialized")
 
 type Repository struct {
 	gitDir   string
@@ -50,16 +53,9 @@ func OpenRepository(ctx context.Context, gitDir, trunkRef string) (*Repository, 
 }
 
 func (repository *Repository) Admit(ctx context.Context, versionID intent.VersionID, content intent.ContentRef) error {
-	oid, err := gitObjectID(content)
+	oid, err := repository.admissibleCommit(ctx, content)
 	if err != nil {
-		return fmt.Errorf("%w: %v", intent.ErrContentNotAdmissible, err)
-	}
-	if err := repository.run(ctx, "cat-file", "-e", oid+"^{commit}"); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return fmt.Errorf("%w: proposed git commit is unavailable", intent.ErrContentNotAdmissible)
-		}
-		return fmt.Errorf("validate proposed git commit: %w", err)
+		return err
 	}
 
 	holdingRef := holdingNamespace + "/" + string(versionID)
@@ -82,6 +78,59 @@ func (repository *Repository) Admit(ctx context.Context, versionID intent.Versio
 			return nil
 		}
 		return fmt.Errorf("create holding ref: %w", err)
+	}
+	return nil
+}
+
+func (repository *Repository) Bootstrap(ctx context.Context, content intent.ContentRef) error {
+	oid, err := gitObjectID(content)
+	if err != nil {
+		return fmt.Errorf("%w: %v", intent.ErrContentNotAdmissible, err)
+	}
+	current, found, err := repository.readRef(ctx, repository.trunkRef)
+	if err != nil {
+		return fmt.Errorf("read trunk ref: %w", err)
+	}
+	if found {
+		if current == oid {
+			return nil
+		}
+		return ErrTrunkAlreadyInitialized
+	}
+	if err := repository.validateCommit(ctx, oid); err != nil {
+		return err
+	}
+	if err := repository.run(ctx, "update-ref", repository.trunkRef, oid, ""); err != nil {
+		current, found, readErr := repository.readRef(ctx, repository.trunkRef)
+		if readErr == nil && found {
+			if current == oid {
+				return nil
+			}
+			return ErrTrunkAlreadyInitialized
+		}
+		return fmt.Errorf("initialize trunk ref: %w", err)
+	}
+	return nil
+}
+
+func (repository *Repository) admissibleCommit(ctx context.Context, content intent.ContentRef) (string, error) {
+	oid, err := gitObjectID(content)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", intent.ErrContentNotAdmissible, err)
+	}
+	if err := repository.validateCommit(ctx, oid); err != nil {
+		return "", err
+	}
+	return oid, nil
+}
+
+func (repository *Repository) validateCommit(ctx context.Context, oid string) error {
+	if err := repository.run(ctx, "cat-file", "-e", oid+"^{commit}"); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return fmt.Errorf("%w: proposed git commit is unavailable", intent.ErrContentNotAdmissible)
+		}
+		return fmt.Errorf("validate proposed git commit: %w", err)
 	}
 	return nil
 }

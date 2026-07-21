@@ -15,6 +15,7 @@ type Handlers struct {
 	ListRepoTokens  http.Handler
 	RevokeRepoToken http.Handler
 	CurrentIntent   http.Handler
+	BootstrapIntent http.Handler
 	ProposeIntent   http.Handler
 	GetChange       http.Handler
 	ListVersions    http.Handler
@@ -56,6 +57,7 @@ func NewMux(h Handlers) *http.ServeMux {
 	getChange := handlerOrNotFound(h.GetChange)
 	listVersions := handlerOrNotFound(h.ListVersions)
 	mux.Handle("GET /v1/repos/{repoID}/intent", currentIntent)
+	mux.Handle("PUT /v1/repos/{repoID}/intent", handlerOrNotFound(h.BootstrapIntent))
 	mux.Handle("POST /v1/repos/{repoID}/proposals", proposeIntent)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}", getChange)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}/versions", listVersions)
