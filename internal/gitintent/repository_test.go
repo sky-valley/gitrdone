@@ -23,6 +23,9 @@ func TestRepositoryAdmitsContentAndAdvancesTrunkWithCompareAndSwap(t *testing.T)
 	versionID := intent.VersionID("version_0123456789abcdef")
 	initial := intent.ContentRef{Engine: "git", Revision: fixture.initial}
 	proposed := intent.ContentRef{Engine: "git", Revision: fixture.proposed}
+	if got, err := repository.Current(ctx); err != nil || got != initial {
+		t.Fatalf("current trunk = %#v, error %v; want %#v, nil", got, err, initial)
+	}
 
 	if err := repository.Admit(ctx, versionID, proposed); err != nil {
 		t.Fatalf("admit proposed content: %v", err)
@@ -48,6 +51,9 @@ func TestRepositoryAdmitsContentAndAdvancesTrunkWithCompareAndSwap(t *testing.T)
 	}
 	if got := gitOutput(t, "--git-dir", fixture.gitDir, "rev-parse", "refs/heads/main"); got != fixture.proposed {
 		t.Fatalf("trunk = %q, want %q", got, fixture.proposed)
+	}
+	if got, err := repository.Current(ctx); err != nil || got != proposed {
+		t.Fatalf("current trunk after advance = %#v, error %v; want %#v, nil", got, err, proposed)
 	}
 
 	if err := repository.Advance(ctx, initial, initial); !errors.Is(err, intent.ErrIntentAdvanced) {

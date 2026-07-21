@@ -23,7 +23,7 @@ func TestRepositoryRestoresIntentAndProposalIdempotencyFromJournal(t *testing.T)
 		t.Fatalf("open first ledger: %v", err)
 	}
 	firstAdmission := &recordingAdmission{}
-	firstProjection := &recordingProjection{}
+	firstProjection := &recordingProjection{current: initialContent}
 	firstRepository, err := intent.OpenRepository(ctx, initialContent, firstLedger, firstAdmission, firstProjection)
 	if err != nil {
 		t.Fatalf("open first repository: %v", err)
@@ -60,7 +60,7 @@ func TestRepositoryRestoresIntentAndProposalIdempotencyFromJournal(t *testing.T)
 		}
 	})
 	secondAdmission := &recordingAdmission{}
-	secondRepository, err := intent.OpenRepository(ctx, initialContent, secondLedger, secondAdmission, &recordingProjection{})
+	secondRepository, err := intent.OpenRepository(ctx, initialContent, secondLedger, secondAdmission, &recordingProjection{current: proposedContent})
 	if err != nil {
 		t.Fatalf("reopen repository: %v", err)
 	}
@@ -203,8 +203,15 @@ func (admission *recordingAdmission) Admit(_ context.Context, versionID intent.V
 	return nil
 }
 
-type recordingProjection struct{}
+type recordingProjection struct {
+	current intent.ContentRef
+}
 
-func (*recordingProjection) Advance(_ context.Context, _, _ intent.ContentRef) error {
+func (projection *recordingProjection) Current(context.Context) (intent.ContentRef, error) {
+	return projection.current, nil
+}
+
+func (projection *recordingProjection) Advance(_ context.Context, _, next intent.ContentRef) error {
+	projection.current = next
 	return nil
 }

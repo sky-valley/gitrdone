@@ -23,14 +23,18 @@ const maxRecordBytes = 1024 * 1024
 const (
 	repositoryInitialized = "repository_initialized"
 	proposalRecorded      = "proposal_recorded"
+	promotionPrepared     = "promotion_prepared"
+	promotionCompleted    = "promotion_completed"
 	promotionRecorded     = "promotion_recorded"
 )
 
 type Ledger struct {
-	mu     sync.Mutex
-	file   *os.File
-	state  journalState
-	closed bool
+	mu          sync.Mutex
+	file        *os.File
+	syncJournal func() error
+	state       journalState
+	closed      bool
+	failed      error
 }
 
 var _ intent.Ledger = (*Ledger)(nil)
@@ -41,18 +45,22 @@ type journalState struct {
 	changes     map[intent.ChangeID]intent.Change
 	versions    map[intent.VersionID]intent.Version
 	promotions  map[intent.PromotionID]intent.Promotion
+	prepared    map[intent.PromotionID]intent.PreparedPromotion
+	pending     intent.PromotionID
+	completed   map[intent.VersionID]intent.PromotionID
 	idempotency map[string]intent.VersionID
 }
 
 type journalRecord struct {
-	Format         int               `json:"format"`
-	Kind           string            `json:"kind"`
-	Initial        *intent.Revision  `json:"initial,omitempty"`
-	IdempotencyKey string            `json:"idempotency_key,omitempty"`
-	Change         *intent.Change    `json:"change,omitempty"`
-	Version        *intent.Version   `json:"version,omitempty"`
-	Promotion      *intent.Promotion `json:"promotion,omitempty"`
-	NextIntent     *intent.Revision  `json:"next_intent,omitempty"`
+	Format         int                `json:"format"`
+	Kind           string             `json:"kind"`
+	Initial        *intent.Revision   `json:"initial,omitempty"`
+	IdempotencyKey string             `json:"idempotency_key,omitempty"`
+	Change         *intent.Change     `json:"change,omitempty"`
+	Version        *intent.Version    `json:"version,omitempty"`
+	Promotion      *intent.Promotion  `json:"promotion,omitempty"`
+	PromotionID    intent.PromotionID `json:"promotion_id,omitempty"`
+	NextIntent     *intent.Revision   `json:"next_intent,omitempty"`
 }
 
 func Open(path string) (*Ledger, error) {
@@ -76,7 +84,7 @@ func Open(path string) (*Ledger, error) {
 			return nil, fmt.Errorf("sync journal directory: %w", err)
 		}
 	}
-	ledger := &Ledger{file: file, state: newJournalState()}
+	ledger := &Ledger{file: file, syncJournal: file.Sync, state: newJournalState()}
 	if err := ledger.replay(); err != nil {
 		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
 		_ = file.Close()
@@ -161,6 +169,39 @@ func (ledger *Ledger) ProposalByIdempotencyKey(ctx context.Context, key string) 
 	}, true, nil
 }
 
+func (ledger *Ledger) PendingPromotion(ctx context.Context) (intent.PreparedPromotion, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return intent.PreparedPromotion{}, false, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return intent.PreparedPromotion{}, false, errors.New("journal is closed")
+	}
+	prepared, found := ledger.state.prepared[ledger.state.pending]
+	return prepared, found, nil
+}
+
+func (ledger *Ledger) CompletedPromotion(ctx context.Context, versionID intent.VersionID) (intent.Promoted, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return intent.Promoted{}, false, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return intent.Promoted{}, false, errors.New("journal is closed")
+	}
+	promotionID, found := ledger.state.completed[versionID]
+	if !found {
+		return intent.Promoted{}, false, nil
+	}
+	promotion := ledger.state.promotions[promotionID]
+	return intent.Promoted{
+		Promotion: promotion,
+		Intent:    ledger.state.revisions[promotion.ToIntent],
+	}, true, nil
+}
+
 func (ledger *Ledger) Initialize(ctx context.Context, initial intent.Revision) error {
 	return ledger.append(ctx, journalRecord{
 		Format:  journalFormat,
@@ -179,12 +220,20 @@ func (ledger *Ledger) RecordProposal(ctx context.Context, idempotencyKey string,
 	})
 }
 
-func (ledger *Ledger) RecordPromotion(ctx context.Context, promotion intent.Promotion, nextIntent intent.Revision) error {
+func (ledger *Ledger) PreparePromotion(ctx context.Context, prepared intent.PreparedPromotion) error {
 	return ledger.append(ctx, journalRecord{
 		Format:     journalFormat,
-		Kind:       promotionRecorded,
-		Promotion:  &promotion,
-		NextIntent: &nextIntent,
+		Kind:       promotionPrepared,
+		Promotion:  &prepared.Promotion,
+		NextIntent: &prepared.Intent,
+	})
+}
+
+func (ledger *Ledger) CompletePromotion(ctx context.Context, promotionID intent.PromotionID) error {
+	return ledger.append(ctx, journalRecord{
+		Format:      journalFormat,
+		Kind:        promotionCompleted,
+		PromotionID: promotionID,
 	})
 }
 
@@ -196,6 +245,9 @@ func (ledger *Ledger) append(ctx context.Context, record journalRecord) error {
 	defer ledger.mu.Unlock()
 	if ledger.closed {
 		return errors.New("journal is closed")
+	}
+	if ledger.failed != nil {
+		return fmt.Errorf("journal cannot accept writes after a failed rollback: %w", ledger.failed)
 	}
 
 	if err := validateRecord(&ledger.state, record); err != nil {
@@ -220,11 +272,16 @@ func (ledger *Ledger) append(ctx context.Context, record journalRecord) error {
 		}
 		if rollbackErr := truncateAndSync(ledger.file, info.Size()); rollbackErr != nil {
 			writeErr = errors.Join(writeErr, fmt.Errorf("rollback partial journal record: %w", rollbackErr))
+			ledger.failed = writeErr
 		}
 		return fmt.Errorf("append journal record: %w", writeErr)
 	}
-	if err := ledger.file.Sync(); err != nil {
-		return fmt.Errorf("sync journal record: %w", err)
+	if syncErr := ledger.syncJournal(); syncErr != nil {
+		if rollbackErr := truncateAndSync(ledger.file, info.Size()); rollbackErr != nil {
+			ledger.failed = errors.Join(syncErr, fmt.Errorf("rollback unsynced journal record: %w", rollbackErr))
+			return fmt.Errorf("sync journal record: %w", ledger.failed)
+		}
+		return fmt.Errorf("sync journal record: %w", syncErr)
 	}
 	applyValidatedRecord(&ledger.state, record)
 	return nil
@@ -329,6 +386,10 @@ func validateRecord(state *journalState, record journalRecord) error {
 		return validateInitialization(state, record)
 	case proposalRecorded:
 		return validateProposal(state, record)
+	case promotionPrepared:
+		return validatePreparedPromotion(state, record)
+	case promotionCompleted:
+		return validateCompletedPromotion(state, record)
 	case promotionRecorded:
 		return validatePromotion(state, record)
 	default:
@@ -408,12 +469,64 @@ func validatePromotion(state *journalState, record journalRecord) error {
 	return nil
 }
 
+func validatePreparedPromotion(state *journalState, record journalRecord) error {
+	if record.Promotion == nil || record.NextIntent == nil {
+		return errors.New("invalid prepared promotion record")
+	}
+	prepared := intent.PreparedPromotion{Promotion: *record.Promotion, Intent: *record.NextIntent}
+	if existing, found := state.prepared[prepared.Promotion.ID]; found {
+		if existing == prepared {
+			return nil
+		}
+		return errors.New("promotion id is already prepared differently")
+	}
+	if existing, found := state.promotions[prepared.Promotion.ID]; found {
+		revision := state.revisions[existing.ToIntent]
+		if existing == prepared.Promotion && revision == prepared.Intent {
+			return nil
+		}
+		return errors.New("promotion id is already completed differently")
+	}
+	if state.pending != "" {
+		return intent.ErrPromotionPending
+	}
+	version, found := state.versions[prepared.Promotion.VersionID]
+	if prepared.Promotion.ID == "" || !found {
+		return errors.New("prepared promotion references an unknown version")
+	}
+	if _, exists := state.completed[version.ID]; exists {
+		return errors.New("version already has a completed promotion")
+	}
+	if prepared.Promotion.FromIntent != state.current.ID || prepared.Promotion.ToIntent != prepared.Intent.ID || prepared.Intent.PreviousID != state.current.ID || prepared.Intent.Content != version.Content {
+		return errors.New("prepared promotion does not advance current intent to its version content")
+	}
+	if _, found := state.revisions[prepared.Intent.ID]; found {
+		return errors.New("duplicate intent revision id")
+	}
+	return nil
+}
+
+func validateCompletedPromotion(state *journalState, record journalRecord) error {
+	if record.PromotionID == "" {
+		return errors.New("completed promotion id is required")
+	}
+	if _, found := state.promotions[record.PromotionID]; found {
+		return nil
+	}
+	if _, found := state.prepared[record.PromotionID]; !found {
+		return errors.New("prepared promotion not found")
+	}
+	return nil
+}
+
 func newJournalState() journalState {
 	return journalState{
 		revisions:   make(map[intent.RevisionID]intent.Revision),
 		changes:     make(map[intent.ChangeID]intent.Change),
 		versions:    make(map[intent.VersionID]intent.Version),
 		promotions:  make(map[intent.PromotionID]intent.Promotion),
+		prepared:    make(map[intent.PromotionID]intent.PreparedPromotion),
+		completed:   make(map[intent.VersionID]intent.PromotionID),
 		idempotency: make(map[string]intent.VersionID),
 	}
 }
@@ -431,10 +544,30 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			state.versions[record.Version.ID] = *record.Version
 			state.idempotency[record.IdempotencyKey] = record.Version.ID
 		}
+	case promotionPrepared:
+		if _, exists := state.promotions[record.Promotion.ID]; exists {
+			return
+		}
+		if _, exists := state.prepared[record.Promotion.ID]; !exists {
+			prepared := intent.PreparedPromotion{Promotion: *record.Promotion, Intent: *record.NextIntent}
+			state.prepared[prepared.Promotion.ID] = prepared
+			state.pending = prepared.Promotion.ID
+		}
+	case promotionCompleted:
+		if _, exists := state.promotions[record.PromotionID]; !exists {
+			prepared := state.prepared[record.PromotionID]
+			state.revisions[prepared.Intent.ID] = prepared.Intent
+			state.promotions[prepared.Promotion.ID] = prepared.Promotion
+			state.completed[prepared.Promotion.VersionID] = prepared.Promotion.ID
+			state.current = prepared.Intent
+			delete(state.prepared, prepared.Promotion.ID)
+			state.pending = ""
+		}
 	case promotionRecorded:
 		if _, exists := state.promotions[record.Promotion.ID]; !exists {
 			state.revisions[record.NextIntent.ID] = *record.NextIntent
 			state.promotions[record.Promotion.ID] = *record.Promotion
+			state.completed[record.Promotion.VersionID] = record.Promotion.ID
 			state.current = *record.NextIntent
 		}
 	}

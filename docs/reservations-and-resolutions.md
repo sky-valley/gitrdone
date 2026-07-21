@@ -600,10 +600,54 @@ Move to a transactional service such as Postgres when the product needs one or m
 
 Do not migrate merely because a database is expected eventually.
 
-### Remaining edge
+### Crash edge
 
-The journal makes completed operations durable, but it does not yet make a Git ref update and a ledger append atomic. In particular, the process may fail after trunk advances but before the promotion record is durable. The next crash-reconciliation slice must introduce a prepared promotion record and safely finish or classify incomplete promotions after restart.
+The journal cannot make a VCS ref update and a ledger append atomic. Resolution 007 defines the prepared-promotion protocol used to recover that boundary safely.
 
 ### Agreed ownership rule
 
 > Prove repository durability with the smallest honest local ledger; change the storage adapter when observed coordination and scale require it.
+
+## Resolution 007: promotions are prepared before projection
+
+**Status:** Agreed and implemented for the current slice
+
+### Reservation
+
+Promotion crosses two independently durable systems: the intent ledger and the VCS trunk projection. Moving trunk before recording the transition can leave trunk at B while canonical intent remains A after a crash. Recording canonical intent first can produce the inverse lie.
+
+### Resolution
+
+A promotion allocates its promotion ID and successor intent ID before moving trunk, then follows this protocol:
+
+```text
+record prepared promotion A → B
+compare-and-swap trunk A → B
+record promotion completion and advance current intent to B
+```
+
+The prepared record contains the exact promotion, version, previous intent, successor intent, and target content required to resume the operation without allocating new identities.
+
+Only one incomplete promotion is permitted per repository in this implementation stage. Proposal admission may continue while reconciliation is pending, but another promotion cannot begin.
+
+### Restart reconciliation
+
+When a prepared promotion is found, gitrdone reads the actual trunk projection:
+
+- If trunk is A, retry the compare-and-swap to B and complete the promotion.
+- If trunk is B, the projection already succeeded; complete the promotion without moving trunk again.
+- If trunk is C, do not overwrite it. Keep the prepared promotion durable and expose a structured reconciliation conflict containing expected A, target B, and actual C.
+
+C does not discard the proposal. It means the exact A → B operation can no longer be completed automatically. A later judgement process may establish what C represents, derive B' by replaying the proposed change onto accepted C, and prepare a new C → B' promotion.
+
+Reads and inspection remain available in the C case. The repository opens with the conflict exposed; promotion remains paused until reconciliation is resolved.
+
+### Retry semantics
+
+Retrying a prepared or completed promotion returns the originally allocated promotion and successor-intent identities. A compare-and-swap race is reread immediately so B can complete and C can be exposed in the same operation.
+
+The ledger's current intent advances only when promotion completion is durable. If completion succeeds but its acknowledgement is lost, retrying reads the completed promotion and repairs the live repository's cached current intent.
+
+### Agreed ownership rule
+
+> A prepared promotion authorises one exact conditional mutation. Retry it when its precondition still holds, finish it when its target already exists, and preserve rather than overwrite unexpected intent.

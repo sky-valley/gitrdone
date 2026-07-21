@@ -82,6 +82,17 @@ func (repository *Repository) Admit(ctx context.Context, versionID intent.Versio
 	return nil
 }
 
+func (repository *Repository) Current(ctx context.Context) (intent.ContentRef, error) {
+	current, found, err := repository.readRef(ctx, repository.trunkRef)
+	if err != nil {
+		return intent.ContentRef{}, fmt.Errorf("read trunk ref: %w", err)
+	}
+	if !found {
+		return intent.ContentRef{}, errors.New("trunk ref not found")
+	}
+	return intent.ContentRef{Engine: "git", Revision: current}, nil
+}
+
 func (repository *Repository) Advance(ctx context.Context, expected, next intent.ContentRef) error {
 	expectedOID, err := gitObjectID(expected)
 	if err != nil {

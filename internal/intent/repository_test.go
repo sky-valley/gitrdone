@@ -13,7 +13,7 @@ func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
 	proposedContent := intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"}
 	admission := &recordingAdmission{}
-	projection := &recordingProjection{}
+	projection := &recordingProjection{current: initialContent}
 	repository, err := intent.NewRepository(initialContent, admission, projection)
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
@@ -110,8 +110,9 @@ func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 func TestRepositoryHoldsStaleProposalInsteadOfAdvancingIntent(t *testing.T) {
 	ctx := context.Background()
 	admission := &recordingAdmission{}
-	projection := &recordingProjection{}
-	repository, err := intent.NewRepository(intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}, admission, projection)
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	projection := &recordingProjection{current: initialContent}
+	repository, err := intent.NewRepository(initialContent, admission, projection)
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
@@ -163,8 +164,8 @@ func TestRepositoryKeepsProposalWhenProjectionFails(t *testing.T) {
 	ctx := context.Background()
 	projectionErr := errors.New("projection unavailable")
 	admission := &recordingAdmission{}
-	projection := &recordingProjection{err: projectionErr}
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	projection := &recordingProjection{current: initialContent, err: projectionErr}
 	repository, err := intent.NewRepository(initialContent, admission, projection)
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
@@ -251,6 +252,7 @@ func (admission *recordingAdmission) Admit(_ context.Context, versionID intent.V
 }
 
 type recordingProjection struct {
+	current  intent.ContentRef
 	advances []projectionAdvance
 	err      error
 }
@@ -262,5 +264,12 @@ type projectionAdvance struct {
 
 func (projection *recordingProjection) Advance(_ context.Context, expected, next intent.ContentRef) error {
 	projection.advances = append(projection.advances, projectionAdvance{expected: expected, next: next})
+	if projection.err == nil {
+		projection.current = next
+	}
 	return projection.err
+}
+
+func (projection *recordingProjection) Current(context.Context) (intent.ContentRef, error) {
+	return projection.current, nil
 }
