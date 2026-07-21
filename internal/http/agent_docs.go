@@ -46,9 +46,9 @@ func newAgentDocs(baseURL string) agentDocs {
 
 	agents := fmt.Sprintf(`# gitrdone Agent Guide
 
-> gitrdone is an authenticated Git smart HTTP and Git LFS service with a small control API for creating backing Git repos and repo-scoped access tokens.
+> gitrdone is a repository service where proposed changes become accepted intent through judgement, with authenticated Git smart HTTP and Git LFS compatibility.
 
-Use this guide when acting as an automated agent against gitrdone. gitrdone is intentionally narrow: it serves Git repos, tokens, Git smart HTTP, and Git LFS. Higher-level product concepts belong in the caller.
+Use this guide when acting as an automated agent against gitrdone. The native API deals in accepted intent, durable changes, and immutable change versions. Git is the first content engine and compatibility surface; it does not define the native repository model.
 
 ## Discovery
 
@@ -70,6 +70,26 @@ Repo tokens are capability grants, not user identity sessions. The token subject
 - readwrite: clone, fetch, pull, push, Git LFS upload/download, read diff endpoints
 
 Normal Git clients should use Basic auth with username x-access-token and a repo token as the password. Do not persist repo tokens in remote URLs. Bearer auth is also accepted by Git routes for service callers.
+
+## Native intent API
+
+Read the repository's currently accepted content with GET /v1/repos/{repoID}/intent.
+
+Propose an immutable repository state with POST /v1/repos/{repoID}/proposals. Idempotency-Key is required for proposals and must identify the same logical proposal on every retry. The request body is:
+
+`+"```json"+`
+{
+  "baseIntent": "intent_...",
+  "contentRef": {
+    "engine": "git",
+    "revision": "<full commit object id>"
+  }
+}
+`+"```"+`
+
+A successful proposal response means the change version was durably admitted. The response always identifies the change and version and reports state as admitted. It may also include a completed promotion when approve-all judgement finished during the request. Promotion is an opportunistic current result, not part of the admission guarantee.
+
+Inspect the durable identity with GET /v1/repos/{repoID}/changes/{changeID}. Read immutable versions with GET /v1/repos/{repoID}/changes/{changeID}/versions. The versions endpoint accepts limit from 1 to 100 and an opaque cursor returned by the previous page.
 
 ## Reliable token creation
 
@@ -117,6 +137,10 @@ Control API for trusted services:
 - GET /v1/repos/{repoID}/tokens
 - POST /v1/repos/{repoID}/tokens/{tokenID}/revoke
 - POST /v1/repos/{repoID}/archive
+- GET /v1/repos/{repoID}/intent
+- POST /v1/repos/{repoID}/proposals
+- GET /v1/repos/{repoID}/changes/{changeID}
+- GET /v1/repos/{repoID}/changes/{changeID}/versions
 
 Git smart HTTP for normal Git clients:
 
@@ -171,13 +195,15 @@ repoID is the external control ID, for example repo_00000000-0000-4000-8000-0000
 
 	llms := fmt.Sprintf(`# gitrdone
 
-> gitrdone is an authenticated Git smart HTTP and Git LFS service with a small control API for creating backing Git repos and repo-scoped access tokens.
+> gitrdone is a repository service where proposed changes become accepted intent through judgement, with Git smart HTTP and Git LFS compatibility.
 
-gitrdone is intended to be used by trusted services and automation agents as a Git backend. Use canonical repo IDs, not namespace/name, as the Git identity. Public discovery files are safe to scrape. Control, Git, and Git LFS operations require the appropriate tokens.
+gitrdone's native API exposes accepted intent, durable changes, and immutable change versions. Use canonical repo IDs, not namespace/name, as repository identity. Public discovery files are safe to scrape. Control, Git, and Git LFS operations require the appropriate tokens.
 
 For retriable automation, include Idempotency-Key on token creation and derive it from the stable logical operation.
 
 List and revoke repo tokens with the control bearer token; token values are returned only at creation.
+
+Idempotency-Key is required on POST /v1/repos/{repoID}/proposals. A successful proposal response means the change version was durably admitted. Promotion may already be included, but is not part of the admission guarantee.
 
 ## Agent Docs
 
@@ -193,6 +219,9 @@ List and revoke repo tokens with the control bearer token; token values are retu
 - [Create repo](%[1]s/v1/repos): POST with control bearer token.
 - [Repo tokens](%[1]s/v1/repos/{repoID}/tokens): POST to create; GET to list metadata with control bearer token.
 - [Revoke repo token](%[1]s/v1/repos/{repoID}/tokens/{tokenID}/revoke): POST with control bearer token.
+- [Current intent](%[1]s/v1/repos/{repoID}/intent): GET the accepted repository content with the control bearer token.
+- [Propose intent](%[1]s/v1/repos/{repoID}/proposals): POST a base intent and immutable content reference with Idempotency-Key.
+- [Inspect changes](%[1]s/v1/repos/{repoID}/changes/{changeID}): GET a change and its bounded version history.
 - [Git smart HTTP and LFS](%[1]s/git/repos/{repoID}.git): Use normal Git commands with repo-scoped tokens.
 - [Git diff endpoints](%[1]s/git/repos/{repoID}.git/show/{sha}.diff): Fetch read-scoped patch text without cloning.
 
@@ -204,7 +233,7 @@ List and revoke repo tokens with the control bearer token; token values are retu
 
 	root := fmt.Sprintf(`# gitrdone
 
-gitrdone serves authenticated Git smart HTTP and Git LFS for repo-ID-addressed backing repos.
+gitrdone makes judgement a native repository capability. Proposed change versions become accepted intent through explicit promotion, with authenticated Git smart HTTP and Git LFS as the first compatibility surface.
 
 Agent entrypoints:
 

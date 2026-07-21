@@ -135,7 +135,7 @@ func closeResources(closeFunc func() error) error {
 }
 
 func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error, error) {
-	handler := httpapi.NewServer(httpapi.Config{
+	handler, closeServer := httpapi.NewServerWithClose(httpapi.Config{
 		BaseURL:              cfg.baseURL,
 		ControlBearer:        cfg.controlBearer,
 		StorageRoot:          cfg.storageRoot,
@@ -143,9 +143,6 @@ func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error,
 		AccessLog:            cfg.accessLog,
 		TrustedProxyPrefixes: cfg.trustedProxyPrefixes,
 	})
-	closeServer := func() error {
-		return nil
-	}
 	if cfg.databaseURL != "" {
 		postgresHandler, closePostgres, err := httpapi.NewPostgresServer(ctx, httpapi.Config{
 			BaseURL:              cfg.baseURL,

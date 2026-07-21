@@ -515,9 +515,12 @@ func NewPostgresServer(ctx context.Context, config Config, databaseURL string) (
 		return nil, nil, err
 	}
 	repos := newPostgresRepoStore(db, nil)
-	repos.gitStorage = newFilesystemGitStorage(config.StorageRoot)
-	return NewServerWithStores(config, repos, newPostgresIdempotencyStore(db, nil)), func() error {
+	gitStorage := newFilesystemGitStorage(config.StorageRoot)
+	repos.gitStorage = gitStorage
+	handler, closeIntentRepositories := newServerWithStores(config, repos, newPostgresIdempotencyStore(db, nil), gitStorage)
+	return handler, func() error {
+		intentErr := closeIntentRepositories()
 		db.Close()
-		return nil
+		return intentErr
 	}, nil
 }

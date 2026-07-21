@@ -52,9 +52,13 @@ func OpenRepository(ctx context.Context, gitDir, trunkRef string) (*Repository, 
 func (repository *Repository) Admit(ctx context.Context, versionID intent.VersionID, content intent.ContentRef) error {
 	oid, err := gitObjectID(content)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", intent.ErrContentNotAdmissible, err)
 	}
 	if err := repository.run(ctx, "cat-file", "-e", oid+"^{commit}"); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return fmt.Errorf("%w: proposed git commit is unavailable", intent.ErrContentNotAdmissible)
+		}
 		return fmt.Errorf("validate proposed git commit: %w", err)
 	}
 

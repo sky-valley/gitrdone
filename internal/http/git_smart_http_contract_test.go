@@ -91,10 +91,15 @@ type repoTokenFixture struct {
 func newGitSmartHTTPFixture(t *testing.T, suffix string) gitSmartHTTPFixture {
 	t.Helper()
 
-	handler := httpapi.NewServer(httpapi.Config{
+	handler, closeHandler := httpapi.NewServerWithClose(httpapi.Config{
 		BaseURL:       "https://git.example.com",
 		ControlBearer: "internal-admin-token",
 		StorageRoot:   t.TempDir(),
+	})
+	t.Cleanup(func() {
+		if err := closeHandler(); err != nil {
+			t.Errorf("close server resources: %v", err)
+		}
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)

@@ -107,6 +107,73 @@ func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 	}
 }
 
+func TestRepositoryReadsAProposedChangeAndItsVersions(t *testing.T) {
+	ctx := context.Background()
+	initial := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initial, &recordingAdmission{}, &recordingProjection{current: initial})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+
+	proposed, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "request-query",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "control-api",
+	})
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+
+	change, found, err := repository.Change(ctx, proposed.Change.ID)
+	if err != nil {
+		t.Fatalf("read change: %v", err)
+	}
+	if !found || change != proposed.Change {
+		t.Fatalf("change = %#v, %t; want %#v, true", change, found, proposed.Change)
+	}
+
+	page, err := repository.Versions(ctx, intent.VersionQuery{ChangeID: proposed.Change.ID, Limit: 1})
+	if err != nil {
+		t.Fatalf("read versions: %v", err)
+	}
+	if len(page.Versions) != 1 || page.Versions[0] != proposed.Version {
+		t.Fatalf("versions = %#v, want [%#v]", page.Versions, proposed.Version)
+	}
+	if page.NextCursor != "" {
+		t.Fatalf("next cursor = %q, want empty", page.NextCursor)
+	}
+	inspection, err := repository.InspectChange(ctx, proposed.Change.ID)
+	if err != nil {
+		t.Fatalf("inspect change: %v", err)
+	}
+	if inspection.Change != proposed.Change || inspection.LatestVersion != proposed.Version || inspection.Promotion != nil {
+		t.Fatalf("change inspection = %#v, want change and latest version without promotion", inspection)
+	}
+	promoted, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      proposed.Version.ID,
+		ExpectedIntent: proposed.Version.BaseIntent,
+	})
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	inspection, err = repository.InspectChange(ctx, proposed.Change.ID)
+	if err != nil {
+		t.Fatalf("inspect promoted change: %v", err)
+	}
+	if inspection.Promotion == nil || *inspection.Promotion != promoted {
+		t.Fatalf("inspection promotion = %#v, want %#v", inspection.Promotion, promoted)
+	}
+
+	_, found, err = repository.Change(ctx, "change_missing")
+	if err != nil {
+		t.Fatalf("read missing change: %v", err)
+	}
+	if found {
+		t.Fatal("missing change was found")
+	}
+}
+
 func TestRepositoryHoldsStaleProposalInsteadOfAdvancingIntent(t *testing.T) {
 	ctx := context.Background()
 	admission := &recordingAdmission{}

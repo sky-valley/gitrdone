@@ -11,7 +11,9 @@ import (
 
 var ErrIntentAdvanced = errors.New("canonical intent advanced")
 var ErrIntentNotFound = errors.New("intent not found")
+var ErrChangeNotFound = errors.New("change not found")
 var ErrVersionNotFound = errors.New("change version not found")
+var ErrContentNotAdmissible = errors.New("content cannot be admitted by the repository engine")
 var ErrIdempotencyConflict = errors.New("idempotency key already used for a different proposal")
 var ErrPromotionPending = errors.New("another promotion is pending reconciliation")
 
@@ -75,6 +77,23 @@ type Promoted struct {
 	Intent    Revision
 }
 
+type VersionQuery struct {
+	ChangeID ChangeID
+	After    VersionID
+	Limit    int
+}
+
+type VersionPage struct {
+	Versions   []Version
+	NextCursor VersionID
+}
+
+type ChangeInspection struct {
+	Change        Change
+	LatestVersion Version
+	Promotion     *Promoted
+}
+
 type PreparedPromotion struct {
 	Promotion Promotion
 	Intent    Revision
@@ -96,7 +115,9 @@ type Repository struct {
 	current     Revision
 	admission   ContentAdmission
 	projection  TrunkProjection
-	ledger      Ledger
+	intents     IntentStore
+	changes     ChangeStore
+	promotions  PromotionJournal
 	conflict    *ReconciliationConflict
 }
 
@@ -140,7 +161,9 @@ func OpenRepository(ctx context.Context, initial ContentRef, ledger Ledger, admi
 		current:    current,
 		admission:  admission,
 		projection: projection,
-		ledger:     ledger,
+		intents:    ledger,
+		changes:    ledger,
+		promotions: ledger,
 	}
 	if err := repository.Reconcile(ctx); err != nil {
 		var conflict *ReconciliationConflict
@@ -166,6 +189,59 @@ func (repository *Repository) ReconciliationConflict() (ReconciliationConflict, 
 	return *repository.conflict, true
 }
 
+func (repository *Repository) Change(ctx context.Context, id ChangeID) (Change, bool, error) {
+	return repository.changes.Change(ctx, id)
+}
+
+func (repository *Repository) InspectChange(ctx context.Context, id ChangeID) (ChangeInspection, error) {
+	change, found, err := repository.changes.Change(ctx, id)
+	if err != nil {
+		return ChangeInspection{}, fmt.Errorf("read change: %w", err)
+	}
+	if !found {
+		return ChangeInspection{}, ErrChangeNotFound
+	}
+	latest, found, err := repository.changes.LatestVersion(ctx, id)
+	if err != nil {
+		return ChangeInspection{}, fmt.Errorf("read latest change version: %w", err)
+	}
+	if !found {
+		return ChangeInspection{}, errors.New("change has no versions")
+	}
+	inspection := ChangeInspection{Change: change, LatestVersion: latest}
+	promoted, found, err := repository.promotions.CompletedPromotion(ctx, latest.ID)
+	if err != nil {
+		return ChangeInspection{}, fmt.Errorf("read latest version promotion: %w", err)
+	}
+	if found {
+		inspection.Promotion = &promoted
+	}
+	return inspection, nil
+}
+
+func (repository *Repository) Versions(ctx context.Context, query VersionQuery) (VersionPage, error) {
+	if query.ChangeID == "" {
+		return VersionPage{}, errors.New("change id is required")
+	}
+	if query.Limit < 1 || query.Limit > 100 {
+		return VersionPage{}, errors.New("version page limit must be between 1 and 100")
+	}
+	if _, found, err := repository.changes.Change(ctx, query.ChangeID); err != nil {
+		return VersionPage{}, fmt.Errorf("read change: %w", err)
+	} else if !found {
+		return VersionPage{}, ErrChangeNotFound
+	}
+	versions, more, err := repository.changes.Versions(ctx, query.ChangeID, query.After, query.Limit)
+	if err != nil {
+		return VersionPage{}, fmt.Errorf("read change versions: %w", err)
+	}
+	page := VersionPage{Versions: versions}
+	if more && len(versions) > 0 {
+		page.NextCursor = versions[len(versions)-1].ID
+	}
+	return page, nil
+}
+
 func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (Proposed, error) {
 	if proposal.IdempotencyKey == "" {
 		return Proposed{}, errors.New("proposal idempotency key is required")
@@ -180,7 +256,7 @@ func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (P
 	repository.proposalMu.Lock()
 	defer repository.proposalMu.Unlock()
 
-	existing, found, err := repository.ledger.ProposalByIdempotencyKey(ctx, proposal.IdempotencyKey)
+	existing, found, err := repository.changes.ProposalByIdempotencyKey(ctx, proposal.IdempotencyKey)
 	if err != nil {
 		return Proposed{}, fmt.Errorf("read proposal idempotency record: %w", err)
 	}
@@ -190,7 +266,7 @@ func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (P
 		}
 		return existing, nil
 	}
-	_, found, err = repository.ledger.Revision(ctx, proposal.BaseIntent)
+	_, found, err = repository.intents.Revision(ctx, proposal.BaseIntent)
 	if err != nil {
 		return Proposed{}, fmt.Errorf("read proposal base intent: %w", err)
 	}
@@ -218,7 +294,7 @@ func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (P
 		return Proposed{}, fmt.Errorf("admit proposed content: %w", err)
 	}
 	change := Change{ID: version.ChangeID}
-	if err := repository.ledger.RecordProposal(ctx, proposal.IdempotencyKey, change, version); err != nil {
+	if err := repository.changes.RecordProposal(ctx, proposal.IdempotencyKey, change, version); err != nil {
 		return Proposed{}, fmt.Errorf("record proposal: %w", err)
 	}
 
@@ -229,7 +305,7 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 	repository.promotionMu.Lock()
 	defer repository.promotionMu.Unlock()
 
-	completed, found, err := repository.ledger.CompletedPromotion(ctx, request.VersionID)
+	completed, found, err := repository.promotions.CompletedPromotion(ctx, request.VersionID)
 	if err != nil {
 		return Promoted{}, fmt.Errorf("read completed promotion: %w", err)
 	}
@@ -243,7 +319,7 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 		repository.stateMu.Unlock()
 		return completed, nil
 	}
-	pending, found, err := repository.ledger.PendingPromotion(ctx)
+	pending, found, err := repository.promotions.PendingPromotion(ctx)
 	if err != nil {
 		return Promoted{}, fmt.Errorf("read pending promotion: %w", err)
 	}
@@ -254,14 +330,14 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 		return repository.reconcileAndRemember(ctx, pending)
 	}
 
-	version, found, err := repository.ledger.Version(ctx, request.VersionID)
+	version, found, err := repository.changes.Version(ctx, request.VersionID)
 	if err != nil {
 		return Promoted{}, fmt.Errorf("read change version: %w", err)
 	}
 	if !found {
 		return Promoted{}, ErrVersionNotFound
 	}
-	current, found, err := repository.ledger.CurrentIntent(ctx)
+	current, found, err := repository.intents.CurrentIntent(ctx)
 	if err != nil {
 		return Promoted{}, fmt.Errorf("read current intent: %w", err)
 	}
@@ -293,7 +369,7 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 		VersionID:  version.ID,
 	}
 	prepared := PreparedPromotion{Promotion: promotion, Intent: nextIntent}
-	if err := repository.ledger.PreparePromotion(ctx, prepared); err != nil {
+	if err := repository.promotions.PreparePromotion(ctx, prepared); err != nil {
 		return Promoted{}, fmt.Errorf("prepare promotion: %w", err)
 	}
 	return repository.reconcileAndRemember(ctx, prepared)
@@ -303,7 +379,7 @@ func (repository *Repository) Reconcile(ctx context.Context) error {
 	repository.promotionMu.Lock()
 	defer repository.promotionMu.Unlock()
 
-	pending, found, err := repository.ledger.PendingPromotion(ctx)
+	pending, found, err := repository.promotions.PendingPromotion(ctx)
 	if err != nil {
 		return fmt.Errorf("read pending promotion: %w", err)
 	}
@@ -329,7 +405,7 @@ func (repository *Repository) reconcileAndRemember(ctx context.Context, prepared
 }
 
 func (repository *Repository) reconcilePrepared(ctx context.Context, prepared PreparedPromotion) (Promoted, error) {
-	from, found, err := repository.ledger.Revision(ctx, prepared.Promotion.FromIntent)
+	from, found, err := repository.intents.Revision(ctx, prepared.Promotion.FromIntent)
 	if err != nil {
 		return Promoted{}, fmt.Errorf("read promotion base intent: %w", err)
 	}
@@ -363,7 +439,7 @@ func (repository *Repository) reconcilePrepared(ctx context.Context, prepared Pr
 			Actual:   actual,
 		}
 	}
-	if err := repository.ledger.CompletePromotion(ctx, prepared.Promotion.ID); err != nil {
+	if err := repository.promotions.CompletePromotion(ctx, prepared.Promotion.ID); err != nil {
 		return Promoted{}, fmt.Errorf("complete promotion: %w", err)
 	}
 

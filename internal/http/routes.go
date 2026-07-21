@@ -14,6 +14,10 @@ type Handlers struct {
 	CreateRepoToken http.Handler
 	ListRepoTokens  http.Handler
 	RevokeRepoToken http.Handler
+	CurrentIntent   http.Handler
+	ProposeIntent   http.Handler
+	GetChange       http.Handler
+	ListVersions    http.Handler
 	GitSmartHTTP    http.Handler
 	GitLFS          http.Handler
 	GitShowDiff     http.Handler
@@ -47,6 +51,15 @@ func NewMux(h Handlers) *http.ServeMux {
 	mux.Handle("GET /v1/repos/{repoID}/tokens", h.ListRepoTokens)
 	mux.Handle("POST /v1/repos/{repoID}/tokens/{tokenID}/revoke", h.RevokeRepoToken)
 
+	currentIntent := handlerOrNotFound(h.CurrentIntent)
+	proposeIntent := handlerOrNotFound(h.ProposeIntent)
+	getChange := handlerOrNotFound(h.GetChange)
+	listVersions := handlerOrNotFound(h.ListVersions)
+	mux.Handle("GET /v1/repos/{repoID}/intent", currentIntent)
+	mux.Handle("POST /v1/repos/{repoID}/proposals", proposeIntent)
+	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}", getChange)
+	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}/versions", listVersions)
+
 	gitSmartHTTP := gitRepoRoute(h.GitSmartHTTP)
 	mux.Handle("GET /git/repos/{repoGitID}/{gitPath...}", gitSmartHTTP)
 	mux.Handle("POST /git/repos/{repoGitID}/{gitPath...}", gitSmartHTTP)
@@ -63,6 +76,13 @@ func NewMux(h Handlers) *http.ServeMux {
 	mux.Handle("GET /git/repos/{repoGitID}/compare/{spec}", gitRepoRoute(h.GitCompareDiff))
 
 	return mux
+}
+
+func handlerOrNotFound(handler http.Handler) http.Handler {
+	if handler == nil {
+		return http.NotFoundHandler()
+	}
+	return handler
 }
 
 func gitRepoRoute(next http.Handler) http.Handler {

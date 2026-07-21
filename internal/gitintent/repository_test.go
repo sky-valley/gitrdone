@@ -80,9 +80,24 @@ func TestRepositoryDoesNotHoldMissingContent(t *testing.T) {
 	if err == nil {
 		t.Fatal("admit missing content succeeded")
 	}
+	if !errors.Is(err, intent.ErrContentNotAdmissible) {
+		t.Fatalf("missing content error = %v, want ErrContentNotAdmissible", err)
+	}
 	cmd := exec.Command("git", "--git-dir", fixture.gitDir, "show-ref", "--verify", "refs/gitrdone/holding/"+string(versionID))
 	if err := cmd.Run(); err == nil {
 		t.Fatal("missing content created a holding ref")
+	}
+}
+
+func TestRepositoryRejectsContentFromAnotherEngine(t *testing.T) {
+	fixture := newGitFixture(t)
+	repository, err := gitintent.OpenRepository(context.Background(), fixture.gitDir, "refs/heads/main")
+	if err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	err = repository.Admit(context.Background(), "version_wrong_engine", intent.ContentRef{Engine: "jj", Revision: fixture.proposed})
+	if !errors.Is(err, intent.ErrContentNotAdmissible) {
+		t.Fatalf("admit error = %v, want ErrContentNotAdmissible", err)
 	}
 }
 

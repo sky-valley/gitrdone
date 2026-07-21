@@ -44,6 +44,7 @@ type journalState struct {
 	revisions   map[intent.RevisionID]intent.Revision
 	changes     map[intent.ChangeID]intent.Change
 	versions    map[intent.VersionID]intent.Version
+	versionIDs  map[intent.ChangeID][]intent.VersionID
 	promotions  map[intent.PromotionID]intent.Promotion
 	prepared    map[intent.PromotionID]intent.PreparedPromotion
 	pending     intent.PromotionID
@@ -136,6 +137,19 @@ func (ledger *Ledger) Revision(ctx context.Context, id intent.RevisionID) (inten
 	return revision, found, nil
 }
 
+func (ledger *Ledger) Change(ctx context.Context, id intent.ChangeID) (intent.Change, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return intent.Change{}, false, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return intent.Change{}, false, errors.New("journal is closed")
+	}
+	change, found := ledger.state.changes[id]
+	return change, found, nil
+}
+
 func (ledger *Ledger) Version(ctx context.Context, id intent.VersionID) (intent.Version, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return intent.Version{}, false, err
@@ -147,6 +161,53 @@ func (ledger *Ledger) Version(ctx context.Context, id intent.VersionID) (intent.
 	}
 	version, found := ledger.state.versions[id]
 	return version, found, nil
+}
+
+func (ledger *Ledger) LatestVersion(ctx context.Context, changeID intent.ChangeID) (intent.Version, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return intent.Version{}, false, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return intent.Version{}, false, errors.New("journal is closed")
+	}
+	ids := ledger.state.versionIDs[changeID]
+	if len(ids) == 0 {
+		return intent.Version{}, false, nil
+	}
+	return ledger.state.versions[ids[len(ids)-1]], true, nil
+}
+
+func (ledger *Ledger) Versions(ctx context.Context, changeID intent.ChangeID, after intent.VersionID, limit int) ([]intent.Version, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return nil, false, errors.New("journal is closed")
+	}
+	ids := ledger.state.versionIDs[changeID]
+	start := 0
+	if after != "" {
+		start = -1
+		for index, id := range ids {
+			if id == after {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, false, intent.ErrVersionNotFound
+		}
+	}
+	end := min(start+limit, len(ids))
+	versions := make([]intent.Version, 0, end-start)
+	for _, id := range ids[start:end] {
+		versions = append(versions, ledger.state.versions[id])
+	}
+	return versions, end < len(ids), nil
 }
 
 func (ledger *Ledger) ProposalByIdempotencyKey(ctx context.Context, key string) (intent.Proposed, bool, error) {
@@ -524,6 +585,7 @@ func newJournalState() journalState {
 		revisions:   make(map[intent.RevisionID]intent.Revision),
 		changes:     make(map[intent.ChangeID]intent.Change),
 		versions:    make(map[intent.VersionID]intent.Version),
+		versionIDs:  make(map[intent.ChangeID][]intent.VersionID),
 		promotions:  make(map[intent.PromotionID]intent.Promotion),
 		prepared:    make(map[intent.PromotionID]intent.PreparedPromotion),
 		completed:   make(map[intent.VersionID]intent.PromotionID),
@@ -542,6 +604,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
 			state.changes[record.Change.ID] = *record.Change
 			state.versions[record.Version.ID] = *record.Version
+			state.versionIDs[record.Change.ID] = append(state.versionIDs[record.Change.ID], record.Version.ID)
 			state.idempotency[record.IdempotencyKey] = record.Version.ID
 		}
 	case promotionPrepared:

@@ -98,6 +98,27 @@ func TestRepositoryRestoresIntentAndProposalIdempotencyFromJournal(t *testing.T)
 	if !found || storedVersion != proposed.Version {
 		t.Fatalf("stored version = %#v, %t; want %#v, true", storedVersion, found, proposed.Version)
 	}
+	storedChange, found, err := secondLedger.Change(ctx, proposed.Change.ID)
+	if err != nil {
+		t.Fatalf("read stored change: %v", err)
+	}
+	if !found || storedChange != proposed.Change {
+		t.Fatalf("stored change = %#v, %t; want %#v, true", storedChange, found, proposed.Change)
+	}
+	latestVersion, found, err := secondLedger.LatestVersion(ctx, proposed.Change.ID)
+	if err != nil {
+		t.Fatalf("read latest stored version: %v", err)
+	}
+	if !found || latestVersion != proposed.Version {
+		t.Fatalf("latest stored version = %#v, %t; want %#v, true", latestVersion, found, proposed.Version)
+	}
+	versions, more, err := secondLedger.Versions(ctx, proposed.Change.ID, "", 1)
+	if err != nil {
+		t.Fatalf("read stored versions: %v", err)
+	}
+	if len(versions) != 1 || versions[0] != proposed.Version || more {
+		t.Fatalf("stored versions = %#v, more %t; want [%#v], false", versions, more, proposed.Version)
+	}
 	storedProposal, found, err := secondLedger.ProposalByIdempotencyKey(ctx, proposal.IdempotencyKey)
 	if err != nil {
 		t.Fatalf("read stored idempotent proposal: %v", err)

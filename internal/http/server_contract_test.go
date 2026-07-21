@@ -658,6 +658,26 @@ func TestControlAuthContract(t *testing.T) {
 			target: "/v1/repos/repo_123/tokens/token_123/revoke",
 		},
 		{
+			name:   "read intent rejects missing auth",
+			method: http.MethodGet,
+			target: "/v1/repos/repo_123/intent",
+		},
+		{
+			name:   "propose rejects missing auth",
+			method: http.MethodPost,
+			target: "/v1/repos/repo_123/proposals",
+		},
+		{
+			name:   "read change rejects missing auth",
+			method: http.MethodGet,
+			target: "/v1/repos/repo_123/changes/change_123",
+		},
+		{
+			name:   "list versions rejects missing auth",
+			method: http.MethodGet,
+			target: "/v1/repos/repo_123/changes/change_123/versions",
+		},
+		{
 			name:        "control route rejects wrong bearer token",
 			method:      http.MethodPost,
 			target:      "/v1/repos",

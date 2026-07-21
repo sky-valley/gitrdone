@@ -6,17 +6,32 @@ import (
 	"sync"
 )
 
-type Ledger interface {
+type IntentStore interface {
 	CurrentIntent(ctx context.Context) (Revision, bool, error)
 	Revision(ctx context.Context, id RevisionID) (Revision, bool, error)
+	Initialize(ctx context.Context, initial Revision) error
+}
+
+type ChangeStore interface {
+	Change(ctx context.Context, id ChangeID) (Change, bool, error)
 	Version(ctx context.Context, id VersionID) (Version, bool, error)
+	LatestVersion(ctx context.Context, changeID ChangeID) (Version, bool, error)
+	Versions(ctx context.Context, changeID ChangeID, after VersionID, limit int) ([]Version, bool, error)
 	ProposalByIdempotencyKey(ctx context.Context, key string) (Proposed, bool, error)
+	RecordProposal(ctx context.Context, idempotencyKey string, change Change, version Version) error
+}
+
+type PromotionJournal interface {
 	PendingPromotion(ctx context.Context) (PreparedPromotion, bool, error)
 	CompletedPromotion(ctx context.Context, versionID VersionID) (Promoted, bool, error)
-	Initialize(ctx context.Context, initial Revision) error
-	RecordProposal(ctx context.Context, idempotencyKey string, change Change, version Version) error
 	PreparePromotion(ctx context.Context, prepared PreparedPromotion) error
 	CompletePromotion(ctx context.Context, promotionID PromotionID) error
+}
+
+type Ledger interface {
+	IntentStore
+	ChangeStore
+	PromotionJournal
 }
 
 type transientLedger struct {
@@ -25,6 +40,7 @@ type transientLedger struct {
 	revisions   map[RevisionID]Revision
 	changes     map[ChangeID]Change
 	versions    map[VersionID]Version
+	versionIDs  map[ChangeID][]VersionID
 	promotions  map[PromotionID]Promotion
 	prepared    map[PromotionID]PreparedPromotion
 	pending     PromotionID
@@ -45,11 +61,53 @@ func (ledger *transientLedger) Revision(_ context.Context, id RevisionID) (Revis
 	return revision, found, nil
 }
 
+func (ledger *transientLedger) Change(_ context.Context, id ChangeID) (Change, bool, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	change, found := ledger.changes[id]
+	return change, found, nil
+}
+
 func (ledger *transientLedger) Version(_ context.Context, id VersionID) (Version, bool, error) {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
 	version, found := ledger.versions[id]
 	return version, found, nil
+}
+
+func (ledger *transientLedger) LatestVersion(_ context.Context, changeID ChangeID) (Version, bool, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	ids := ledger.versionIDs[changeID]
+	if len(ids) == 0 {
+		return Version{}, false, nil
+	}
+	return ledger.versions[ids[len(ids)-1]], true, nil
+}
+
+func (ledger *transientLedger) Versions(_ context.Context, changeID ChangeID, after VersionID, limit int) ([]Version, bool, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	ids := ledger.versionIDs[changeID]
+	start := 0
+	if after != "" {
+		start = -1
+		for index, id := range ids {
+			if id == after {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, false, ErrVersionNotFound
+		}
+	}
+	end := min(start+limit, len(ids))
+	versions := make([]Version, 0, end-start)
+	for _, id := range ids[start:end] {
+		versions = append(versions, ledger.versions[id])
+	}
+	return versions, end < len(ids), nil
 }
 
 func (ledger *transientLedger) ProposalByIdempotencyKey(_ context.Context, key string) (Proposed, bool, error) {
@@ -88,6 +146,7 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.revisions = map[RevisionID]Revision{initial.ID: initial}
 	ledger.changes = make(map[ChangeID]Change)
 	ledger.versions = make(map[VersionID]Version)
+	ledger.versionIDs = make(map[ChangeID][]VersionID)
 	ledger.promotions = make(map[PromotionID]Promotion)
 	ledger.prepared = make(map[PromotionID]PreparedPromotion)
 	ledger.completed = make(map[VersionID]PromotionID)
@@ -100,6 +159,7 @@ func (ledger *transientLedger) RecordProposal(_ context.Context, key string, cha
 	defer ledger.mu.Unlock()
 	ledger.changes[change.ID] = change
 	ledger.versions[version.ID] = version
+	ledger.versionIDs[change.ID] = append(ledger.versionIDs[change.ID], version.ID)
 	ledger.idempotency[key] = version.ID
 	return nil
 }

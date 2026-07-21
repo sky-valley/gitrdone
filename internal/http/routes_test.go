@@ -39,6 +39,30 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 			wantRepoID: "repo_123",
 		},
 		{
+			name:       "current intent",
+			method:     http.MethodGet,
+			target:     "/v1/repos/repo_123/intent",
+			wantRepoID: "repo_123",
+		},
+		{
+			name:       "propose change",
+			method:     http.MethodPost,
+			target:     "/v1/repos/repo_123/proposals",
+			wantRepoID: "repo_123",
+		},
+		{
+			name:       "get change",
+			method:     http.MethodGet,
+			target:     "/v1/repos/repo_123/changes/change_abc",
+			wantRepoID: "repo_123",
+		},
+		{
+			name:       "list change versions",
+			method:     http.MethodGet,
+			target:     "/v1/repos/repo_123/changes/change_abc/versions",
+			wantRepoID: "repo_123",
+		},
+		{
 			name:        "revoke repo token",
 			method:      http.MethodPost,
 			target:      "/v1/repos/repo_123/tokens/token_abc/revoke",
@@ -51,9 +75,11 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var gotRepoID string
 			var gotTokenID string
+			var gotChangeID string
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotRepoID = r.PathValue("repoID")
 				gotTokenID = r.PathValue("tokenID")
+				gotChangeID = r.PathValue("changeID")
 				w.WriteHeader(http.StatusNoContent)
 			})
 			mux := NewMux(Handlers{
@@ -64,6 +90,10 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 				CreateRepoToken: handler,
 				ListRepoTokens:  handler,
 				RevokeRepoToken: handler,
+				CurrentIntent:   handler,
+				ProposeIntent:   handler,
+				GetChange:       handler,
+				ListVersions:    handler,
 				GitSmartHTTP:    internalServerError(),
 			})
 
@@ -78,6 +108,9 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 			}
 			if gotTokenID != tt.wantTokenID {
 				t.Fatalf("tokenID = %q, want %q", gotTokenID, tt.wantTokenID)
+			}
+			if (tt.name == "get change" || tt.name == "list change versions") && gotChangeID != "change_abc" {
+				t.Fatalf("changeID = %q, want change_abc", gotChangeID)
 			}
 		})
 	}

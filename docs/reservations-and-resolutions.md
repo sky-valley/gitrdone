@@ -651,3 +651,53 @@ The ledger's current intent advances only when promotion completion is durable. 
 ### Agreed ownership rule
 
 > A prepared promotion authorises one exact conditional mutation. Retry it when its precondition still holds, finish it when its target already exists, and preserve rather than overwrite unexpected intent.
+
+## Resolution 008: proposal admission is the stable native API boundary
+
+**Status:** Agreed and implemented for the current slice
+
+### Reservation
+
+The first native API could accidentally make today's approve-all implementation part of the permanent contract by treating `POST /proposals` as “judgement finished and promotion succeeded.” Real judgement will often be asynchronous: it may run tools, amend the proposal, wait for a simulator, or require human attention.
+
+Combining admission and final outcome would force a breaking API change as soon as judgement becomes real. Mixing reconciliation conflicts into the current-intent response would likewise confuse accepted repository content with operational projection state.
+
+### Resolution
+
+The stable API meaning of a successful proposal request is:
+
+> The repository durably admitted this immutable change version.
+
+The initial control API is:
+
+```text
+GET  /v1/repos/{repoID}/intent
+POST /v1/repos/{repoID}/proposals
+GET  /v1/repos/{repoID}/changes/{changeID}
+GET  /v1/repos/{repoID}/changes/{changeID}/versions
+```
+
+`POST /proposals` requires a repository-scoped idempotency key and accepts a base intent plus an engine-neutral content reference. It is a command that creates a `Change` and immutable `ChangeVersion`; it does not introduce a separate Proposal resource.
+
+The response always returns the admitted change and version. It may include a completed promotion when the current judgement implementation finishes during the request, but clients must not depend on synchronous promotion. A held or stale-base proposal remains a successful admission.
+
+The current implementation uses an approve-all application service that invokes the separate domain operations `Propose` and `Promote`. HTTP validates and maps the wire contract; it does not own that lifecycle. There is no public promotion endpoint: promotion remains an outcome chosen through repository judgement.
+
+`GET /intent` returns accepted content only. Change inspection returns the latest immutable version and its promotion when completed. Full version history is exposed separately through a bounded, cursor-based endpoint so the change summary cannot grow without limit.
+
+Producer provenance is assigned by the authenticated service boundary, not accepted from proposal JSON. The current control-token slice records `control-api`; richer authenticated actor identity can replace that attribution without changing the proposal wire shape.
+
+### Remaining edges
+
+This resolution does not yet settle:
+
+- the judgement-process read API and event stream;
+- repository operational status and reconciliation-conflict endpoints;
+- asynchronous retry and wake-up mechanics after admission;
+- actor identity beyond the current control API authority;
+- native API authorization distinct from the shared control token;
+- how a richer client discovers amendments and reconciliation instructions.
+
+### Agreed ownership rule
+
+> Proposal admission is durable and stable; judgement and promotion are evolving consequences that must not be baked into the submission transport.
