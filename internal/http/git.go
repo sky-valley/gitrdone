@@ -3,7 +3,6 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"strings"
 )
 
 type gitHTTPBackend interface {
@@ -35,7 +34,7 @@ func gitSmartHTTPHandler(access gitAccessAuthorizer, backend gitHTTPBackend) htt
 
 		grant, err := access.AuthorizeGitAccess(r.Context(), authorizeGitAccessInput{
 			RepoID:    repoID,
-			Token:     gitTokenFromRequest(r),
+			Token:     repoTokenFromRequest(r),
 			Operation: operation,
 		})
 		if err != nil {
@@ -81,22 +80,6 @@ func gitOperationFromService(service string) (gitOperation, bool) {
 	default:
 		return "", false
 	}
-}
-
-func gitTokenFromRequest(r *http.Request) string {
-	username, password, ok := r.BasicAuth()
-	if ok {
-		if password != "" {
-			return password
-		}
-		return username
-	}
-
-	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(token)
 }
 
 func writeGitAccessError(w http.ResponseWriter, err error) {

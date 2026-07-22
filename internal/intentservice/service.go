@@ -29,6 +29,7 @@ type Proposal struct {
 	IdempotencyKey string
 	BaseIntent     intent.RevisionID
 	Content        intent.ContentRef
+	Producer       string
 }
 
 type Admission struct {
@@ -38,11 +39,10 @@ type Admission struct {
 
 type Service struct {
 	repositories Repositories
-	producer     string
 }
 
-func New(repositories Repositories, producer string) *Service {
-	return &Service{repositories: repositories, producer: strings.TrimSpace(producer)}
+func New(repositories Repositories) *Service {
+	return &Service{repositories: repositories}
 }
 
 func (service *Service) CurrentIntent(ctx context.Context, repoID string) (intent.Revision, error) {
@@ -58,7 +58,8 @@ func (service *Service) Bootstrap(ctx context.Context, repoID string, content in
 }
 
 func (service *Service) Propose(ctx context.Context, repoID string, proposal Proposal) (Admission, error) {
-	if service.producer == "" {
+	producer := strings.TrimSpace(proposal.Producer)
+	if producer == "" {
 		return Admission{}, errors.New("proposal producer is not configured")
 	}
 	repository, err := service.repositories.Resolve(ctx, repoID)
@@ -69,7 +70,7 @@ func (service *Service) Propose(ctx context.Context, repoID string, proposal Pro
 		IdempotencyKey: proposal.IdempotencyKey,
 		BaseIntent:     proposal.BaseIntent,
 		Content:        proposal.Content,
-		Producer:       service.producer,
+		Producer:       producer,
 	})
 	if err != nil {
 		return Admission{}, err

@@ -100,6 +100,25 @@ func TestPostgresRepoStoreContract(t *testing.T) {
 	if grant.CanonicalRef != "refs/heads/main" {
 		t.Fatalf("canonical ref = %q, want refs/heads/main", grant.CanonicalRef)
 	}
+	intentGrant, err := store.AuthorizeRepoAccess(ctx, authorizeRepoAccessInput{
+		RepoID:     repo.ID,
+		Token:      token.Token,
+		Capability: repoCapabilityReadIntent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intentGrant.Subject != "reader-job" {
+		t.Fatalf("intent grant subject = %q, want reader-job", intentGrant.Subject)
+	}
+	_, err = store.AuthorizeRepoAccess(ctx, authorizeRepoAccessInput{
+		RepoID:     repo.ID,
+		Token:      token.Token,
+		Capability: repoCapabilityPropose,
+	})
+	if !errors.Is(err, errRepoTokenForbidden) {
+		t.Fatalf("read token propose error = %v, want errRepoTokenForbidden", err)
+	}
 
 	tokens, err := store.ListRepoTokens(ctx, listRepoTokensInput{RepoID: repo.ID})
 	if err != nil {

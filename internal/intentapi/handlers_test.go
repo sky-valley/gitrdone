@@ -16,7 +16,7 @@ import (
 func TestNativeIntentAPIAdmitsAndImmediatelyPromotesAProposal(t *testing.T) {
 	repository, projection := newRepository(t)
 	initial := repository.CurrentIntent()
-	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}, "control-api"))
+	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}))
 
 	requestBody := []byte(`{
 		"baseIntent":"` + string(initial.ID) + `",
@@ -28,7 +28,7 @@ func TestNativeIntentAPIAdmitsAndImmediatelyPromotesAProposal(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "request-1")
 	recorder := httptest.NewRecorder()
 
-	handlers.Propose.ServeHTTP(recorder, request)
+	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
@@ -92,7 +92,7 @@ func TestNativeIntentAPIAdmitsAndImmediatelyPromotesAProposal(t *testing.T) {
 	retry.Header.Set("Content-Type", "application/json")
 	retry.Header.Set("Idempotency-Key", "request-1")
 	retryRecorder := httptest.NewRecorder()
-	handlers.Propose.ServeHTTP(retryRecorder, retry)
+	handlers.Propose.ServeHTTP(retryRecorder, intentapi.WithAuthenticatedProducer(retry, "control-api"))
 	if retryRecorder.Code != http.StatusOK {
 		t.Fatalf("retry status = %d, want 200: %s", retryRecorder.Code, retryRecorder.Body.String())
 	}
@@ -126,7 +126,7 @@ func TestNativeIntentAPIKeepsAdmissionSuccessSeparateFromPromotion(t *testing.T)
 		t.Fatalf("promote setup change: %v", err)
 	}
 
-	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}, "control-api"))
+	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}))
 	request := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/proposals", bytes.NewBufferString(`{
 		"baseIntent":"`+string(stale.ID)+`",
 		"contentRef":{"engine":"git","revision":"cccccccc"}
@@ -136,7 +136,7 @@ func TestNativeIntentAPIKeepsAdmissionSuccessSeparateFromPromotion(t *testing.T)
 	request.Header.Set("Idempotency-Key", "stale-proposal")
 	recorder := httptest.NewRecorder()
 
-	handlers.Propose.ServeHTTP(recorder, request)
+	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
@@ -166,7 +166,7 @@ func TestNativeIntentAPIReadsIntentChangeAndBoundedVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("propose: %v", err)
 	}
-	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}, "control-api"))
+	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}))
 
 	intentRequest := httptest.NewRequest(http.MethodGet, "/v1/repos/repo_123/intent", nil)
 	intentRequest.SetPathValue("repoID", "repo_123")
@@ -235,7 +235,7 @@ func TestNativeIntentAPIReadsIntentChangeAndBoundedVersions(t *testing.T) {
 func TestNativeIntentAPIRejectsSpoofedProducerAndUnsafeRetries(t *testing.T) {
 	repository, _ := newRepository(t)
 	baseIntent := repository.CurrentIntent().ID
-	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}, "control-api"))
+	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}))
 
 	tests := []struct {
 		name   string
@@ -264,7 +264,7 @@ func TestNativeIntentAPIRejectsSpoofedProducerAndUnsafeRetries(t *testing.T) {
 				request.Header.Set("Idempotency-Key", test.header)
 			}
 			recorder := httptest.NewRecorder()
-			handlers.Propose.ServeHTTP(recorder, request)
+			handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 			if recorder.Code != test.status {
 				t.Fatalf("status = %d, want %d: %s", recorder.Code, test.status, recorder.Body.String())
 			}
@@ -277,7 +277,7 @@ func TestNativeIntentAPIRejectsSpoofedProducerAndUnsafeRetries(t *testing.T) {
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", "same-key")
 		recorder := httptest.NewRecorder()
-		handlers.Propose.ServeHTTP(recorder, request)
+		handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 		return recorder
 	}
 	if first := propose("bbbbbbbb"); first.Code != http.StatusOK {
@@ -294,7 +294,7 @@ func TestNativeIntentAPIReturnsUnprocessableForContentTheEngineCannotAdmit(t *te
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
-	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}, "control-api"))
+	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}))
 	request := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/proposals", bytes.NewBufferString(`{
 		"baseIntent":"`+string(repository.CurrentIntent().ID)+`",
 		"contentRef":{"engine":"jj","revision":"not-in-this-engine"}
@@ -304,7 +304,7 @@ func TestNativeIntentAPIReturnsUnprocessableForContentTheEngineCannotAdmit(t *te
 	request.Header.Set("Idempotency-Key", "wrong-engine")
 	recorder := httptest.NewRecorder()
 
-	handlers.Propose.ServeHTTP(recorder, request)
+	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422: %s", recorder.Code, recorder.Body.String())

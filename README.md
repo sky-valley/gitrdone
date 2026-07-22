@@ -126,9 +126,9 @@ Token scopes:
 
 | Scope | Allows |
 | --- | --- |
-| `read` | clone, fetch, pull, Git LFS downloads, read diff endpoints |
-| `write` | push, Git LFS uploads |
-| `readwrite` | clone, fetch, pull, push, Git LFS upload/download, read diff endpoints |
+| `read` | clone, fetch, pull, Git LFS downloads, read diff endpoints, read current intent |
+| `write` | push, Git LFS uploads, propose content |
+| `readwrite` | all read and write capabilities; required by `grd submit` |
 
 Create-token responses include the raw token. List and revoke endpoints return metadata only.
 
@@ -152,6 +152,10 @@ Other control routes:
 GET  /v1/repos/{repoID}
 POST /v1/repos/{repoID}/archive
 ```
+
+## Native Intent Access
+
+`GET /v1/repos/{repoID}/intent` accepts a `read` or `readwrite` repo token and returns the currently accepted content. `POST /v1/repos/{repoID}/proposals` accepts a `write` or `readwrite` repo token plus `Idempotency-Key`; the admitted producer is derived from the token subject rather than request JSON. The control bearer remains accepted on both routes for trusted service callers. Root-intent bootstrap remains control-only.
 
 ## Git Access
 

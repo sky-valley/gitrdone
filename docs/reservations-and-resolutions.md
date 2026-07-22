@@ -759,3 +759,55 @@ This slice does not decide whether the eventual Git UX permits typing `git push 
 ### Agreed ownership rule
 
 > External transports may make content available and request admission. Only repository promotion may advance accepted intent and its trunk projection.
+
+## Resolution 010: submission continues the current workstream
+
+**Status:** Agreed
+
+### Reservation
+
+After submitting a change, a workspace needs a useful base for immediate successor work. Returning to the last accepted intent keeps new work independent, but makes the submitted content disappear from the active workspace while judgement is pending. Continuing from the submitted change preserves the developer's working context, but creates an explicit dependency on unpromoted work.
+
+There was also a question about whether a Git commit already provides the native change boundary.
+
+### Resolution
+
+Submitting B freezes and proposes its current version, then starts successor work C on top of B. This is the default when continuing the same workstream. If B is held, C remains usable and explicitly depends on B.
+
+Starting a new workstream is a separate operation and normally begins from current accepted intent. The client should not ask which behavior is desired after every submission; continuity is the default, while starting independent work is explicit.
+
+Conceptually:
+
+```text
+Accepted intent: A
+Working change: B based on A
+
+submit B
+
+Submitted change: B
+Working change: C based on B
+```
+
+If B promotes unchanged, the distinction collapses naturally. If B is amended, rejected, or conflicts, reconciliation must preserve C and explain how its dependency changed rather than discarding it.
+
+### Git compatibility boundary
+
+A Git commit can provide immutable content for a compatibility adapter, but it does not perform the whole native operation. It does not by itself:
+
+- create or preserve logical change identity;
+- submit the version for judgement;
+- record held or promoted state;
+- create and track the successor relationship.
+
+The native target is closer to a continuously snapshotted working change: editing evolves the current change, submission freezes a proposed version, and successor work begins immediately. A Git adapter may initially require a clean commit, but that requirement is adapter plumbing rather than the intended product ergonomics.
+
+### Agreed product rule
+
+> Continue a workstream from what was just proposed; start a new workstream from accepted intent.
+
+### Remaining edges
+
+- how a thin Git client represents the new working change before it has content;
+- when the successor receives a durable gitrdone change ID;
+- the exact command and UX for starting an independent workstream;
+- how clients expose recovery when a dependency is amended or rejected.

@@ -61,23 +61,23 @@ Use this guide when acting as an automated agent against gitrdone. The native AP
 
 ## Authentication
 
-Control API endpoints require an internal control bearer token. Git endpoints require repo-scoped tokens minted by the control API.
+Administrative control API endpoints require an internal control bearer token. Git and native proposal access use repo-scoped tokens minted by the control API. The control bearer remains accepted on native intent endpoints for trusted service callers.
 
 Repo tokens are capability grants, not user identity sessions. The token subject is audit context supplied by the caller. Supported repo token scopes are:
 
-- read: clone, fetch, pull, Git LFS downloads, read diff endpoints
-- write: push, Git LFS uploads
-- readwrite: clone, fetch, pull, push, Git LFS upload/download, read diff endpoints
+- read: clone, fetch, pull, Git LFS downloads, read diff endpoints, read current intent
+- write: push, Git LFS uploads, propose content
+- readwrite: all read and write capabilities; required by grd submit because submission reads current intent and publishes content
 
-Normal Git clients should use Basic auth with username x-access-token and a repo token as the password. Do not persist repo tokens in remote URLs. Bearer auth is also accepted by Git routes for service callers.
+Normal Git clients should use Basic auth with username x-access-token and a repo token as the password. Do not persist repo tokens in remote URLs. Bearer auth is also accepted by Git and native intent routes for service callers.
 
 ## Native intent API
 
-Read the repository's currently accepted content with GET /v1/repos/{repoID}/intent.
+Read the repository's currently accepted content with GET /v1/repos/{repoID}/intent using a read or readwrite repo token, or the control bearer.
 
 For a new repository only, publish the initial Git commit to a noncanonical ref, then establish root intent with PUT /v1/repos/{repoID}/intent using the control bearer token. Retrying the same content is idempotent. Different content is rejected after initialization.
 
-Propose an immutable repository state with POST /v1/repos/{repoID}/proposals. Idempotency-Key is required for proposals and must identify the same logical proposal on every retry. The request body is:
+Propose an immutable repository state with POST /v1/repos/{repoID}/proposals using a write or readwrite repo token, or the control bearer. The admitted version's producer comes from the authenticated repo-token subject and cannot be supplied in request JSON. Idempotency-Key is required for proposals and must identify the same logical proposal on every retry. The request body is:
 
 `+"```json"+`
 {
@@ -222,9 +222,9 @@ Idempotency-Key is required on POST /v1/repos/{repoID}/proposals. A successful p
 - [Create repo](%[1]s/v1/repos): POST with control bearer token.
 - [Repo tokens](%[1]s/v1/repos/{repoID}/tokens): POST to create; GET to list metadata with control bearer token.
 - [Revoke repo token](%[1]s/v1/repos/{repoID}/tokens/{tokenID}/revoke): POST with control bearer token.
-- [Current intent](%[1]s/v1/repos/{repoID}/intent): GET the accepted repository content with the control bearer token.
+- [Current intent](%[1]s/v1/repos/{repoID}/intent): GET the accepted repository content with a read/readwrite repo token or the control bearer.
 - [Bootstrap intent](%[1]s/v1/repos/{repoID}/intent): PUT the first immutable content reference once with the control bearer token.
-- [Propose intent](%[1]s/v1/repos/{repoID}/proposals): POST a base intent and immutable content reference with Idempotency-Key.
+- [Propose intent](%[1]s/v1/repos/{repoID}/proposals): POST with a write/readwrite repo token or the control bearer, a base intent, an immutable content reference, and Idempotency-Key.
 - [Inspect changes](%[1]s/v1/repos/{repoID}/changes/{changeID}): GET a change and its bounded version history.
 - [Git smart HTTP and LFS](%[1]s/git/repos/{repoID}.git): Use normal Git commands with repo-scoped tokens.
 - [Git diff endpoints](%[1]s/git/repos/{repoID}.git/show/{sha}.diff): Fetch read-scoped patch text without cloning.

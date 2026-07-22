@@ -43,7 +43,7 @@ func newServerWithStores(config Config, repos repoStore, idempotency idempotency
 		idempotency = newMemoryIdempotencyStore(nil)
 	}
 	intentRepositories := newIntentRepositoryRegistry(config.StorageRoot, repos, gitStorage)
-	intentHandlers := intentapi.NewHandlers(intentservice.New(intentRepositories, "control-api"))
+	intentHandlers := intentapi.NewHandlers(intentservice.New(intentRepositories))
 
 	mux := NewMux(Handlers{
 		AgentDocs:       agentDocsHandler(config.BaseURL),
@@ -54,9 +54,9 @@ func newServerWithStores(config Config, repos repoStore, idempotency idempotency
 		CreateRepoToken: control(createRepoTokenHandler(repos, idempotency, config.BaseURL)),
 		ListRepoTokens:  control(listRepoTokensHandler(repos)),
 		RevokeRepoToken: control(revokeRepoTokenHandler(repos)),
-		CurrentIntent:   control(intentHandlers.CurrentIntent),
+		CurrentIntent:   intentAccessAuth(config.ControlBearer, repos, repoCapabilityReadIntent, intentHandlers.CurrentIntent),
 		BootstrapIntent: control(intentHandlers.Bootstrap),
-		ProposeIntent:   control(intentHandlers.Propose),
+		ProposeIntent:   intentAccessAuth(config.ControlBearer, repos, repoCapabilityPropose, intentHandlers.Propose),
 		GetChange:       control(intentHandlers.GetChange),
 		ListVersions:    control(intentHandlers.ListVersions),
 		GitSmartHTTP:    gitSmartHTTPHandler(repos, execGitHTTPBackend{}),

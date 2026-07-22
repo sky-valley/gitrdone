@@ -1,6 +1,7 @@
 package intentapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -31,6 +32,17 @@ func NewHandlers(service *intentservice.Service) Handlers {
 		GetChange:     getChangeHandler(service),
 		ListVersions:  listVersionsHandler(service),
 	}
+}
+
+type authenticatedProducerContextKey struct{}
+
+func WithAuthenticatedProducer(request *http.Request, producer string) *http.Request {
+	return request.WithContext(context.WithValue(request.Context(), authenticatedProducerContextKey{}, strings.TrimSpace(producer)))
+}
+
+func authenticatedProducer(request *http.Request) string {
+	producer, _ := request.Context().Value(authenticatedProducerContextKey{}).(string)
+	return producer
 }
 
 func bootstrapHandler(service *intentservice.Service) http.Handler {
@@ -175,6 +187,7 @@ func proposeHandler(service *intentservice.Service) http.Handler {
 		admission, err := service.Propose(r.Context(), repoID, intentservice.Proposal{
 			IdempotencyKey: idempotencyKey,
 			BaseIntent:     intent.RevisionID(body.BaseIntent),
+			Producer:       authenticatedProducer(r),
 			Content: intent.ContentRef{
 				Engine:   body.ContentRef.Engine,
 				Revision: body.ContentRef.Revision,

@@ -237,7 +237,7 @@ func serveLFSLocksVerify(w http.ResponseWriter, r *http.Request, access gitAcces
 func authorizeLFSAccess(r *http.Request, access gitAccessAuthorizer, repoID string, operation gitOperation) (gitAccessGrant, error) {
 	return access.AuthorizeGitAccess(r.Context(), authorizeGitAccessInput{
 		RepoID:    repoID,
-		Token:     gitTokenFromRequest(r),
+		Token:     repoTokenFromRequest(r),
 		Operation: operation,
 	})
 }

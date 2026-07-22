@@ -269,40 +269,9 @@ func (store *postgresRepoStore) RevokeRepoToken(ctx context.Context, input revok
 }
 
 func (store *postgresRepoStore) AuthorizeGitAccess(ctx context.Context, input authorizeGitAccessInput) (gitAccessGrant, error) {
-	repo, err := store.GetRepo(ctx, getRepoInput{ID: input.RepoID})
+	repo, token, now, err := store.authorizeRepoToken(ctx, input.RepoID, input.Token)
 	if err != nil {
 		return gitAccessGrant{}, err
-	}
-	if !repo.ArchivedAt.IsZero() {
-		return gitAccessGrant{}, errRepoArchived
-	}
-	if input.Token == "" {
-		return gitAccessGrant{}, errRepoTokenInvalid
-	}
-
-	token, err := scanRepoToken(store.db.QueryRow(ctx, `
-		SELECT
-			t.id::text, t.repo_id::text, r.namespace, r.name, t.token_hash, t.scope, t.subject,
-			t.expires_at, t.created_at, t.revoked_at, t.last_used_at
-		FROM repo_tokens t
-		JOIN repos r ON r.id = t.repo_id
-		WHERE t.token_hash = $1
-	`, hashRepoToken(input.Token)))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return gitAccessGrant{}, errRepoTokenInvalid
-	}
-	if err != nil {
-		return gitAccessGrant{}, err
-	}
-	if token.RepoID != repo.ID {
-		return gitAccessGrant{}, errRepoTokenInvalid
-	}
-	if !token.RevokedAt.IsZero() {
-		return gitAccessGrant{}, errRepoTokenInvalid
-	}
-	now := store.now()
-	if !now.Before(token.ExpiresAt) {
-		return gitAccessGrant{}, errRepoTokenInvalid
 	}
 	if !scopeAllowsGitOperation(token.Scope, input.Operation) {
 		return gitAccessGrant{}, errRepoTokenForbidden
@@ -311,11 +280,7 @@ func (store *postgresRepoStore) AuthorizeGitAccess(ctx context.Context, input au
 	if err != nil {
 		return gitAccessGrant{}, err
 	}
-	if _, err := store.db.Exec(ctx, `
-		UPDATE repo_tokens
-		SET last_used_at = $2
-		WHERE id = $1::uuid
-	`, token.ID, now); err != nil {
+	if err := store.markRepoTokenUsed(ctx, token.ID, now); err != nil {
 		return gitAccessGrant{}, err
 	}
 	return gitAccessGrant{
@@ -324,6 +289,61 @@ func (store *postgresRepoStore) AuthorizeGitAccess(ctx context.Context, input au
 		Subject:      token.Subject,
 		CanonicalRef: "refs/heads/" + repo.DefaultBranch,
 	}, nil
+}
+
+func (store *postgresRepoStore) AuthorizeRepoAccess(ctx context.Context, input authorizeRepoAccessInput) (repoAccessGrant, error) {
+	repo, token, now, err := store.authorizeRepoToken(ctx, input.RepoID, input.Token)
+	if err != nil {
+		return repoAccessGrant{}, err
+	}
+	if !scopeAllowsRepoCapability(token.Scope, input.Capability) {
+		return repoAccessGrant{}, errRepoTokenForbidden
+	}
+	if err := store.markRepoTokenUsed(ctx, token.ID, now); err != nil {
+		return repoAccessGrant{}, err
+	}
+	return repoAccessGrant{RepoID: repo.ID, Subject: token.Subject}, nil
+}
+
+func (store *postgresRepoStore) authorizeRepoToken(ctx context.Context, repoID string, rawToken string) (repoRecord, repoTokenRecord, time.Time, error) {
+	repo, err := store.GetRepo(ctx, getRepoInput{ID: repoID})
+	if err != nil {
+		return repoRecord{}, repoTokenRecord{}, time.Time{}, err
+	}
+	if !repo.ArchivedAt.IsZero() {
+		return repoRecord{}, repoTokenRecord{}, time.Time{}, errRepoArchived
+	}
+	if rawToken == "" {
+		return repoRecord{}, repoTokenRecord{}, time.Time{}, errRepoTokenInvalid
+	}
+	token, err := scanRepoToken(store.db.QueryRow(ctx, `
+		SELECT
+			t.id::text, t.repo_id::text, r.namespace, r.name, t.token_hash, t.scope, t.subject,
+			t.expires_at, t.created_at, t.revoked_at, t.last_used_at
+		FROM repo_tokens t
+		JOIN repos r ON r.id = t.repo_id
+		WHERE t.token_hash = $1
+	`, hashRepoToken(rawToken)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repoRecord{}, repoTokenRecord{}, time.Time{}, errRepoTokenInvalid
+	}
+	if err != nil {
+		return repoRecord{}, repoTokenRecord{}, time.Time{}, err
+	}
+	now := store.now()
+	if token.RepoID != repo.ID || !token.RevokedAt.IsZero() || !now.Before(token.ExpiresAt) {
+		return repoRecord{}, repoTokenRecord{}, time.Time{}, errRepoTokenInvalid
+	}
+	return repo, token, now, nil
+}
+
+func (store *postgresRepoStore) markRepoTokenUsed(ctx context.Context, tokenID string, usedAt time.Time) error {
+	_, err := store.db.Exec(ctx, `
+		UPDATE repo_tokens
+		SET last_used_at = $2
+		WHERE id = $1::uuid
+	`, tokenID, usedAt)
+	return err
 }
 
 type postgresIdempotencyStore struct {

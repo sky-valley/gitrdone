@@ -80,7 +80,7 @@ func gitDiffHandler(access gitAccessAuthorizer, backend gitDiffBackend, kind git
 
 		grant, err := access.AuthorizeGitAccess(r.Context(), authorizeGitAccessInput{
 			RepoID:    repoID,
-			Token:     gitTokenFromRequest(r),
+			Token:     repoTokenFromRequest(r),
 			Operation: gitOperationRead,
 		})
 		if err != nil {

@@ -279,7 +279,9 @@ Branches should not define coordination inside the native model. Their tradition
 
 Branches may remain part of Git-compatible UX. Saying that branches are dead is an internal coordination claim, not a demand that Git users stop seeing refs immediately.
 
-All active work should normally be understood relative to current canonical intent. Rich engines may keep descendants continuously rebased. Other clients may reconcile less gracefully. Stacking unpromoted changes is first-class: if B depends on A, promotion or amendment of A should propagate through B's known dependency rather than orphaning it.
+New workstreams normally begin from current canonical intent. Continuing an existing workstream is different: submitting B freezes that version and starts successor work on top of B, even while B remains unpromoted. Rich engines may keep those descendants continuously rebased. Other clients may reconcile less gracefully. Stacking unpromoted changes is first-class: if B depends on A, promotion or amendment of A should propagate through B's known dependency rather than orphaning it.
+
+The native model does not require a separate staging and commit ceremony. Editing evolves the current working change; submission freezes and proposes a version of that change, then starts its successor. Git commits may provide the snapshot boundary for a compatibility adapter, but they are not the native product operation and do not replace proposal identity, judgement state, or successor creation.
 
 ## Divergences
 

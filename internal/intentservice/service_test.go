@@ -15,13 +15,14 @@ func TestApproveAllServiceAdmitsBeforeAttemptingPromotion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
-	service := intentservice.New(staticResolver{repository: repository}, "control-api")
+	service := intentservice.New(staticResolver{repository: repository})
 	initial := repository.CurrentIntent()
 
 	admission, err := service.Propose(context.Background(), "repo_123", intentservice.Proposal{
 		IdempotencyKey: "request-1",
 		BaseIntent:     initial.ID,
 		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "control-api",
 	})
 	if err != nil {
 		t.Fatalf("propose: %v", err)
@@ -37,6 +38,7 @@ func TestApproveAllServiceAdmitsBeforeAttemptingPromotion(t *testing.T) {
 		IdempotencyKey: "request-stale",
 		BaseIntent:     initial.ID,
 		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "control-api",
 	})
 	if err != nil {
 		t.Fatalf("propose stale change: %v", err)
