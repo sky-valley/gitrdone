@@ -13,6 +13,7 @@ type Config struct {
 	BaseURL              string
 	ControlBearer        string
 	StorageRoot          string
+	IntentTriage         intentservice.Triage
 	MaxLFSObjectBytes    int64
 	AccessLog            io.Writer
 	TrustedProxyPrefixes []netip.Prefix
@@ -43,7 +44,7 @@ func newServerWithStores(config Config, repos repoStore, idempotency idempotency
 		idempotency = newMemoryIdempotencyStore(nil)
 	}
 	intentRepositories := newIntentRepositoryRegistry(config.StorageRoot, repos, gitStorage)
-	intentHandlers := intentapi.NewHandlers(intentservice.New(intentRepositories))
+	intentHandlers := intentapi.NewHandlers(intentservice.NewWithTriage(intentRepositories, config.IntentTriage))
 
 	mux := NewMux(Handlers{
 		AgentDocs:       agentDocsHandler(config.BaseURL),

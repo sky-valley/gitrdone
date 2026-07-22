@@ -18,13 +18,19 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) != 1 || args[0] != "submit" {
-		fmt.Fprintln(stderr, "usage: grd submit")
+	if len(args) != 1 || (args[0] != "submit" && args[0] != "status") {
+		fmt.Fprintln(stderr, "usage: grd <submit|status>")
 		return 2
 	}
 	client := grdclient.Client{Stdout: stdout}
-	if err := client.Submit(ctx, "."); err != nil {
-		fmt.Fprintf(stderr, "grd submit: %v\n", err)
+	var err error
+	if args[0] == "submit" {
+		err = client.Submit(ctx, ".")
+	} else {
+		err = client.Status(ctx, ".")
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "grd %s: %v\n", args[0], err)
 		return 1
 	}
 	return 0

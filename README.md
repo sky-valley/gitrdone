@@ -155,7 +155,19 @@ POST /v1/repos/{repoID}/archive
 
 ## Native Intent Access
 
-`GET /v1/repos/{repoID}/intent` accepts a `read` or `readwrite` repo token and returns the currently accepted content. `POST /v1/repos/{repoID}/proposals` accepts a `write` or `readwrite` repo token plus `Idempotency-Key`; the admitted producer is derived from the token subject rather than request JSON. The control bearer remains accepted on both routes for trusted service callers. Root-intent bootstrap remains control-only.
+`GET /v1/repos/{repoID}/intent` accepts a `read` or `readwrite` repo token and returns the currently accepted content. `POST /v1/repos/{repoID}/proposals` accepts a `write` or `readwrite` repo token plus `Idempotency-Key`; the admitted producer is derived from the token subject rather than request JSON. A proposal may include `dependencies`, an array of exact admitted version IDs that must promote before the dependent version can promote. The control bearer remains accepted on both routes for trusted service callers. Root-intent bootstrap remains control-only.
+
+## grd client
+
+Build the thin client and run it inside a clean Git workspace whose `origin` is a gitrdone HTTP remote:
+
+```bash
+go build -o grd ./cmd/grd
+grd submit
+grd status
+```
+
+`grd submit` publishes the current committed content and admits it for judgement. Immediate promotion is reported directly. When a version remains held, the client records a local continuation cursor so subsequent work can be submitted with an explicit dependency on that exact version. `grd status` shows the last known relationship between the active workspace and its submitted parent. The current Git adapter still requires a clean committed workspace; automatic working-change snapshots remain a native-client target.
 
 ## Git Access
 

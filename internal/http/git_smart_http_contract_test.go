@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sky-valley/gitrdone/internal/intentservice"
+
 	httpapi "github.com/sky-valley/gitrdone/internal/http"
 )
 
@@ -118,12 +120,17 @@ type repoTokenFixture struct {
 }
 
 func newGitSmartHTTPFixture(t *testing.T, suffix string) gitSmartHTTPFixture {
+	return newGitSmartHTTPFixtureWithTriage(t, suffix, nil)
+}
+
+func newGitSmartHTTPFixtureWithTriage(t *testing.T, suffix string, triage intentservice.Triage) gitSmartHTTPFixture {
 	t.Helper()
 
 	handler, closeHandler := httpapi.NewServerWithClose(httpapi.Config{
 		BaseURL:       "https://git.example.com",
 		ControlBearer: "internal-admin-token",
 		StorageRoot:   t.TempDir(),
+		IntentTriage:  triage,
 	})
 	t.Cleanup(func() {
 		if err := closeHandler(); err != nil {

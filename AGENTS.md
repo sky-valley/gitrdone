@@ -32,7 +32,7 @@ Tool mapping:
 
 ### Current implementation guidance
 
-- The existing HTTP service is a generic Git artifact service. While it exists, keep caller-specific product concepts such as recommendations, workflows, tenants, and runtime users out of that service unless they are opaque caller metadata. Do not mistake this temporary boundary for the future judgement domain.
+- The currently deployed gitrdone HTTP service is a generic Git artifact service; it is scaffolding for the judgement-native repository described in `docs/vision.md`. While it exists, keep caller-specific product concepts such as recommendations, workflows, tenants, and runtime users out of that service unless they are opaque caller metadata. Do not mistake this temporary boundary for the product mission.
 - Control API identity is the repo ID. Repo names are labels and Git-facing locator components, not canonical control identifiers.
 - Keep HTTP handlers thin over small interfaces. Put lifecycle behavior in repository/service implementations and keep request/response mapping in handlers.
 - Work red-green for implementation changes: add or update focused tests first, confirm the failure, then implement the smallest change that makes them pass.

@@ -3,6 +3,7 @@ package intent
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 )
 
@@ -72,7 +73,7 @@ func (ledger *transientLedger) Version(_ context.Context, id VersionID) (Version
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
 	version, found := ledger.versions[id]
-	return version, found, nil
+	return cloneVersion(version), found, nil
 }
 
 func (ledger *transientLedger) LatestVersion(_ context.Context, changeID ChangeID) (Version, bool, error) {
@@ -82,7 +83,7 @@ func (ledger *transientLedger) LatestVersion(_ context.Context, changeID ChangeI
 	if len(ids) == 0 {
 		return Version{}, false, nil
 	}
-	return ledger.versions[ids[len(ids)-1]], true, nil
+	return cloneVersion(ledger.versions[ids[len(ids)-1]]), true, nil
 }
 
 func (ledger *transientLedger) Versions(_ context.Context, changeID ChangeID, after VersionID, limit int) ([]Version, bool, error) {
@@ -105,7 +106,7 @@ func (ledger *transientLedger) Versions(_ context.Context, changeID ChangeID, af
 	end := min(start+limit, len(ids))
 	versions := make([]Version, 0, end-start)
 	for _, id := range ids[start:end] {
-		versions = append(versions, ledger.versions[id])
+		versions = append(versions, cloneVersion(ledger.versions[id]))
 	}
 	return versions, end < len(ids), nil
 }
@@ -117,7 +118,7 @@ func (ledger *transientLedger) ProposalByIdempotencyKey(_ context.Context, key s
 	if !found {
 		return Proposed{}, false, nil
 	}
-	version := ledger.versions[versionID]
+	version := cloneVersion(ledger.versions[versionID])
 	return Proposed{Change: ledger.changes[version.ChangeID], Version: version}, true, nil
 }
 
@@ -158,10 +159,15 @@ func (ledger *transientLedger) RecordProposal(_ context.Context, key string, cha
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	ledger.changes[change.ID] = change
-	ledger.versions[version.ID] = version
+	ledger.versions[version.ID] = cloneVersion(version)
 	ledger.versionIDs[change.ID] = append(ledger.versionIDs[change.ID], version.ID)
 	ledger.idempotency[key] = version.ID
 	return nil
+}
+
+func cloneVersion(version Version) Version {
+	version.Dependencies = slices.Clone(version.Dependencies)
+	return version
 }
 
 func (ledger *transientLedger) PreparePromotion(_ context.Context, prepared PreparedPromotion) error {

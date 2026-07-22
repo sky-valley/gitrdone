@@ -3,10 +3,68 @@ package intent_test
 import (
 	"context"
 	"errors"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/sky-valley/gitrdone/internal/intent"
 )
+
+func TestRepositoryAdmitsDependentVersionAndRefusesPrematurePromotion(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	projection := &recordingProjection{current: initialContent}
+	repository, err := intent.NewRepository(initialContent, &recordingAdmission{}, projection)
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	baseIntent := repository.CurrentIntent()
+
+	parent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "request-parent",
+		BaseIntent:     baseIntent.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose parent: %v", err)
+	}
+	dependent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "request-dependent",
+		BaseIntent:     baseIntent.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
+		Dependencies:   []intent.VersionID{parent.Version.ID},
+	})
+	if err != nil {
+		t.Fatalf("propose dependent: %v", err)
+	}
+	if !slices.Equal(dependent.Version.Dependencies, []intent.VersionID{parent.Version.ID}) {
+		t.Fatalf("dependent versions = %q, want parent version %q", dependent.Version.Dependencies, parent.Version.ID)
+	}
+	dependent.Version.Dependencies[0] = "version_corrupted_by_caller"
+	inspection, err := repository.InspectChange(ctx, dependent.Change.ID)
+	if err != nil {
+		t.Fatalf("inspect dependent: %v", err)
+	}
+	if !slices.Equal(inspection.LatestVersion.Dependencies, []intent.VersionID{parent.Version.ID}) {
+		t.Fatalf("stored dependencies changed through returned value: %q", inspection.LatestVersion.Dependencies)
+	}
+
+	_, err = repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      dependent.Version.ID,
+		ExpectedIntent: baseIntent.ID,
+	})
+	if !errors.Is(err, intent.ErrDependenciesPending) {
+		t.Fatalf("promote dependent error = %v, want ErrDependenciesPending", err)
+	}
+	if got := repository.CurrentIntent(); got != baseIntent {
+		t.Fatalf("current intent = %#v, want unchanged %#v", got, baseIntent)
+	}
+	if len(projection.advances) != 0 {
+		t.Fatalf("projection advances = %d, want 0", len(projection.advances))
+	}
+}
 
 func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 	ctx := context.Background()
@@ -137,7 +195,7 @@ func TestRepositoryReadsAProposedChangeAndItsVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read versions: %v", err)
 	}
-	if len(page.Versions) != 1 || page.Versions[0] != proposed.Version {
+	if len(page.Versions) != 1 || !reflect.DeepEqual(page.Versions[0], proposed.Version) {
 		t.Fatalf("versions = %#v, want [%#v]", page.Versions, proposed.Version)
 	}
 	if page.NextCursor != "" {
@@ -147,7 +205,7 @@ func TestRepositoryReadsAProposedChangeAndItsVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect change: %v", err)
 	}
-	if inspection.Change != proposed.Change || inspection.LatestVersion != proposed.Version || inspection.Promotion != nil {
+	if inspection.Change != proposed.Change || !reflect.DeepEqual(inspection.LatestVersion, proposed.Version) || inspection.Promotion != nil {
 		t.Fatalf("change inspection = %#v, want change and latest version without promotion", inspection)
 	}
 	promoted, err := repository.Promote(ctx, intent.PromoteRequest{

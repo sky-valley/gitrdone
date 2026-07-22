@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -148,6 +149,86 @@ func TestNativeIntentAPIKeepsAdmissionSuccessSeparateFromPromotion(t *testing.T)
 	decodeResponse(t, recorder, &receipt)
 	if receipt.State != "admitted" {
 		t.Fatalf("state = %q, want admitted", receipt.State)
+	}
+	if len(receipt.Promotion) != 0 && !bytes.Equal(receipt.Promotion, []byte("null")) {
+		t.Fatalf("promotion = %s, want absent or null", receipt.Promotion)
+	}
+}
+
+func TestNativeIntentAPIReturnsDurableAdmissionWhenTriageFails(t *testing.T) {
+	repository, _ := newRepository(t)
+	baseIntent := repository.CurrentIntent()
+	handlers := intentapi.NewHandlers(intentservice.NewWithTriage(staticResolver{repository: repository}, failingTriage{}))
+	request := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/proposals", bytes.NewBufferString(`{
+		"baseIntent":"`+string(baseIntent.ID)+`",
+		"contentRef":{"engine":"git","revision":"bbbbbbbb"}
+	}`))
+	request.SetPathValue("repoID", "repo_123")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "triage-failure")
+	recorder := httptest.NewRecorder()
+
+	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "ion"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want admitted 200: %s", recorder.Code, recorder.Body.String())
+	}
+	var receipt struct {
+		State   string `json:"state"`
+		Version struct {
+			ID string `json:"id"`
+		} `json:"version"`
+		Promotion json.RawMessage `json:"promotion"`
+	}
+	decodeResponse(t, recorder, &receipt)
+	if receipt.State != "admitted" || receipt.Version.ID == "" {
+		t.Fatalf("receipt = %#v, want durable admission", receipt)
+	}
+	if len(receipt.Promotion) != 0 && !bytes.Equal(receipt.Promotion, []byte("null")) {
+		t.Fatalf("promotion = %s, want absent or null", receipt.Promotion)
+	}
+	if got := repository.CurrentIntent(); got != baseIntent {
+		t.Fatalf("current intent = %#v, want unchanged %#v", got, baseIntent)
+	}
+}
+
+func TestNativeIntentAPIAdmitsAnExplicitVersionDependency(t *testing.T) {
+	repository, _ := newRepository(t)
+	baseIntent := repository.CurrentIntent()
+	parent, err := repository.Propose(context.Background(), intent.Proposal{
+		IdempotencyKey: "parent",
+		BaseIntent:     baseIntent.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose parent: %v", err)
+	}
+	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}))
+	request := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/proposals", bytes.NewBufferString(`{
+		"baseIntent":"`+string(baseIntent.ID)+`",
+		"contentRef":{"engine":"git","revision":"cccccccc"},
+		"dependencies":["`+string(parent.Version.ID)+`"]
+	}`))
+	request.SetPathValue("repoID", "repo_123")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "dependent")
+	recorder := httptest.NewRecorder()
+
+	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "ion"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	var receipt struct {
+		Version struct {
+			Dependencies []string `json:"dependencies"`
+		} `json:"version"`
+		Promotion json.RawMessage `json:"promotion"`
+	}
+	decodeResponse(t, recorder, &receipt)
+	if len(receipt.Version.Dependencies) != 1 || receipt.Version.Dependencies[0] != string(parent.Version.ID) {
+		t.Fatalf("dependencies = %q, want [%q]", receipt.Version.Dependencies, parent.Version.ID)
 	}
 	if len(receipt.Promotion) != 0 && !bytes.Equal(receipt.Promotion, []byte("null")) {
 		t.Fatalf("promotion = %s, want absent or null", receipt.Promotion)
@@ -346,6 +427,12 @@ func (acceptingAdmission) Admit(context.Context, intent.VersionID, intent.Conten
 
 type rejectingAdmission struct {
 	err error
+}
+
+type failingTriage struct{}
+
+func (failingTriage) DecideNext(context.Context, intent.Proposed) (intentservice.NextAction, error) {
+	return "", errors.New("triage unavailable")
 }
 
 func (admission rejectingAdmission) Admit(context.Context, intent.VersionID, intent.ContentRef) error {

@@ -20,6 +20,23 @@ type Repository interface {
 	Versions(ctx context.Context, query intent.VersionQuery) (intent.VersionPage, error)
 }
 
+type NextAction string
+
+const (
+	Hold    NextAction = "hold"
+	Promote NextAction = "promote"
+)
+
+type Triage interface {
+	DecideNext(ctx context.Context, proposed intent.Proposed) (NextAction, error)
+}
+
+type promoteAllTriage struct{}
+
+func (promoteAllTriage) DecideNext(context.Context, intent.Proposed) (NextAction, error) {
+	return Promote, nil
+}
+
 type Repositories interface {
 	Resolve(ctx context.Context, repoID string) (Repository, error)
 	Bootstrap(ctx context.Context, repoID string, content intent.ContentRef) (intent.Revision, error)
@@ -30,6 +47,7 @@ type Proposal struct {
 	BaseIntent     intent.RevisionID
 	Content        intent.ContentRef
 	Producer       string
+	Dependencies   []intent.VersionID
 }
 
 type Admission struct {
@@ -39,10 +57,18 @@ type Admission struct {
 
 type Service struct {
 	repositories Repositories
+	triage       Triage
 }
 
 func New(repositories Repositories) *Service {
-	return &Service{repositories: repositories}
+	return NewWithTriage(repositories, promoteAllTriage{})
+}
+
+func NewWithTriage(repositories Repositories, triage Triage) *Service {
+	if triage == nil {
+		triage = promoteAllTriage{}
+	}
+	return &Service{repositories: repositories, triage: triage}
 }
 
 func (service *Service) CurrentIntent(ctx context.Context, repoID string) (intent.Revision, error) {
@@ -71,11 +97,22 @@ func (service *Service) Propose(ctx context.Context, repoID string, proposal Pro
 		BaseIntent:     proposal.BaseIntent,
 		Content:        proposal.Content,
 		Producer:       producer,
+		Dependencies:   proposal.Dependencies,
 	})
 	if err != nil {
 		return Admission{}, err
 	}
 	admission := Admission{Proposed: proposed}
+	action, err := service.triage.DecideNext(ctx, proposed)
+	if err != nil {
+		return admission, fmt.Errorf("choose next judgement action: %w", err)
+	}
+	if action == Hold {
+		return admission, nil
+	}
+	if action != Promote {
+		return admission, fmt.Errorf("unsupported next judgement action %q", action)
+	}
 	promoted, err := repository.Promote(ctx, intent.PromoteRequest{
 		VersionID:      proposed.Version.ID,
 		ExpectedIntent: proposed.Version.BaseIntent,
@@ -84,10 +121,10 @@ func (service *Service) Propose(ctx context.Context, repoID string, proposal Pro
 	case err == nil:
 		admission.Promotion = &promoted
 		return admission, nil
-	case errors.Is(err, intent.ErrIntentAdvanced), errors.Is(err, intent.ErrPromotionPending):
+	case errors.Is(err, intent.ErrIntentAdvanced), errors.Is(err, intent.ErrPromotionPending), errors.Is(err, intent.ErrDependenciesPending):
 		return admission, nil
 	default:
-		return Admission{}, fmt.Errorf("proposal was admitted but immediate promotion did not complete: %w", err)
+		return admission, fmt.Errorf("proposal was admitted but immediate promotion did not complete: %w", err)
 	}
 }
 

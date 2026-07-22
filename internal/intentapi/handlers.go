@@ -114,11 +114,12 @@ type changeSummaryResponse struct {
 }
 
 type versionResponse struct {
-	ID         string             `json:"id"`
-	Change     string             `json:"change"`
-	BaseIntent string             `json:"baseIntent"`
-	ContentRef contentRefResponse `json:"contentRef"`
-	Producer   string             `json:"producer"`
+	ID           string             `json:"id"`
+	Change       string             `json:"change"`
+	BaseIntent   string             `json:"baseIntent"`
+	ContentRef   contentRefResponse `json:"contentRef"`
+	Producer     string             `json:"producer"`
+	Dependencies []string           `json:"dependencies,omitempty"`
 }
 
 type promotionResponse struct {
@@ -151,8 +152,9 @@ func currentIntentHandler(service *intentservice.Service) http.Handler {
 
 func proposeHandler(service *intentservice.Service) http.Handler {
 	type requestBody struct {
-		BaseIntent string `json:"baseIntent"`
-		ContentRef struct {
+		BaseIntent   string   `json:"baseIntent"`
+		Dependencies []string `json:"dependencies,omitempty"`
+		ContentRef   struct {
 			Engine   string `json:"engine"`
 			Revision string `json:"revision"`
 		} `json:"contentRef"`
@@ -180,6 +182,15 @@ func proposeHandler(service *intentservice.Service) http.Handler {
 			writeError(w, http.StatusBadRequest, "contentRef requires engine and revision")
 			return
 		}
+		dependencies := make([]intent.VersionID, len(body.Dependencies))
+		for index, dependency := range body.Dependencies {
+			dependency = strings.TrimSpace(dependency)
+			if dependency == "" {
+				writeError(w, http.StatusBadRequest, "dependencies must contain version ids")
+				return
+			}
+			dependencies[index] = intent.VersionID(dependency)
+		}
 		repoID, ok := repositoryID(w, r)
 		if !ok {
 			return
@@ -188,12 +199,13 @@ func proposeHandler(service *intentservice.Service) http.Handler {
 			IdempotencyKey: idempotencyKey,
 			BaseIntent:     intent.RevisionID(body.BaseIntent),
 			Producer:       authenticatedProducer(r),
+			Dependencies:   dependencies,
 			Content: intent.ContentRef{
 				Engine:   body.ContentRef.Engine,
 				Revision: body.ContentRef.Revision,
 			},
 		})
-		if err != nil {
+		if err != nil && admission.Proposed.Version.ID == "" {
 			writeProposalError(w, err)
 			return
 		}
@@ -329,6 +341,8 @@ func writeProposalError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "Idempotency-Key was already used for a different proposal")
 	case errors.Is(err, intent.ErrIntentNotFound):
 		writeError(w, http.StatusUnprocessableEntity, "baseIntent does not identify accepted repository intent")
+	case errors.Is(err, intent.ErrVersionNotFound):
+		writeError(w, http.StatusUnprocessableEntity, "dependency does not identify an admitted change version")
 	case errors.Is(err, intent.ErrContentNotAdmissible):
 		writeError(w, http.StatusUnprocessableEntity, "contentRef cannot be admitted by this repository engine")
 	default:
@@ -393,12 +407,17 @@ func mapChange(change intent.Change) changeIdentityResponse {
 }
 
 func mapVersion(version intent.Version) versionResponse {
+	dependencies := make([]string, len(version.Dependencies))
+	for index, dependency := range version.Dependencies {
+		dependencies[index] = string(dependency)
+	}
 	return versionResponse{
-		ID:         string(version.ID),
-		Change:     string(version.ChangeID),
-		BaseIntent: string(version.BaseIntent),
-		ContentRef: mapContentRef(version.Content),
-		Producer:   version.Producer,
+		ID:           string(version.ID),
+		Change:       string(version.ChangeID),
+		BaseIntent:   string(version.BaseIntent),
+		ContentRef:   mapContentRef(version.Content),
+		Producer:     version.Producer,
+		Dependencies: dependencies,
 	}
 }
 

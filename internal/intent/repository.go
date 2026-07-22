@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 )
 
@@ -16,6 +17,7 @@ var ErrVersionNotFound = errors.New("change version not found")
 var ErrContentNotAdmissible = errors.New("content cannot be admitted by the repository engine")
 var ErrIdempotencyConflict = errors.New("idempotency key already used for a different proposal")
 var ErrPromotionPending = errors.New("another promotion is pending reconciliation")
+var ErrDependenciesPending = errors.New("change dependencies are not promoted")
 
 type ContentRef struct {
 	Engine   string
@@ -41,11 +43,12 @@ type Change struct {
 }
 
 type Version struct {
-	ID         VersionID
-	ChangeID   ChangeID
-	BaseIntent RevisionID
-	Content    ContentRef
-	Producer   string
+	ID           VersionID
+	ChangeID     ChangeID
+	BaseIntent   RevisionID
+	Content      ContentRef
+	Producer     string
+	Dependencies []VersionID
 }
 
 type Promotion struct {
@@ -60,6 +63,7 @@ type Proposal struct {
 	BaseIntent     RevisionID
 	Content        ContentRef
 	Producer       string
+	Dependencies   []VersionID
 }
 
 type Proposed struct {
@@ -261,7 +265,7 @@ func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (P
 		return Proposed{}, fmt.Errorf("read proposal idempotency record: %w", err)
 	}
 	if found {
-		if existing.Version.BaseIntent != proposal.BaseIntent || existing.Version.Content != proposal.Content || existing.Version.Producer != proposal.Producer {
+		if existing.Version.BaseIntent != proposal.BaseIntent || existing.Version.Content != proposal.Content || existing.Version.Producer != proposal.Producer || !slices.Equal(existing.Version.Dependencies, proposal.Dependencies) {
 			return Proposed{}, ErrIdempotencyConflict
 		}
 		return existing, nil
@@ -272,6 +276,21 @@ func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (P
 	}
 	if !found {
 		return Proposed{}, ErrIntentNotFound
+	}
+	seenDependencies := make(map[VersionID]struct{}, len(proposal.Dependencies))
+	for _, dependencyID := range proposal.Dependencies {
+		if dependencyID == "" {
+			return Proposed{}, errors.New("proposal dependency version id is required")
+		}
+		if _, duplicate := seenDependencies[dependencyID]; duplicate {
+			return Proposed{}, errors.New("proposal dependencies must be unique")
+		}
+		seenDependencies[dependencyID] = struct{}{}
+		if _, found, err := repository.changes.Version(ctx, dependencyID); err != nil {
+			return Proposed{}, fmt.Errorf("read proposal dependency: %w", err)
+		} else if !found {
+			return Proposed{}, ErrVersionNotFound
+		}
 	}
 
 	changeID, err := newID("change")
@@ -284,11 +303,12 @@ func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (P
 	}
 
 	version := Version{
-		ID:         VersionID(versionID),
-		ChangeID:   ChangeID(changeID),
-		BaseIntent: proposal.BaseIntent,
-		Content:    proposal.Content,
-		Producer:   proposal.Producer,
+		ID:           VersionID(versionID),
+		ChangeID:     ChangeID(changeID),
+		BaseIntent:   proposal.BaseIntent,
+		Content:      proposal.Content,
+		Producer:     proposal.Producer,
+		Dependencies: slices.Clone(proposal.Dependencies),
 	}
 	if err := repository.admission.Admit(ctx, version.ID, version.Content); err != nil {
 		return Proposed{}, fmt.Errorf("admit proposed content: %w", err)
@@ -336,6 +356,13 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 	}
 	if !found {
 		return Promoted{}, ErrVersionNotFound
+	}
+	for _, dependencyID := range version.Dependencies {
+		if _, found, err := repository.promotions.CompletedPromotion(ctx, dependencyID); err != nil {
+			return Promoted{}, fmt.Errorf("read dependency promotion: %w", err)
+		} else if !found {
+			return Promoted{}, ErrDependenciesPending
+		}
 	}
 	current, found, err := repository.intents.CurrentIntent(ctx)
 	if err != nil {

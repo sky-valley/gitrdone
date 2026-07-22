@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/sky-valley/gitrdone/internal/intentservice"
 )
 
 type journeyWorld struct {
@@ -38,9 +40,13 @@ type journeyCommandResult struct {
 }
 
 func newJourneyWorld(t *testing.T) *journeyWorld {
+	return newJourneyWorldWithTriage(t, nil)
+}
+
+func newJourneyWorldWithTriage(t *testing.T, triage intentservice.Triage) *journeyWorld {
 	t.Helper()
 
-	server := newGitSmartHTTPFixture(t, "journey")
+	server := newGitSmartHTTPFixtureWithTriage(t, "journey", triage)
 	bootstrapToken := createRepoTokenFixture(t, server.handler, server.repo.ID, "readwrite", "journey-bootstrap")
 	canonicalRemote := server.tokenizedGitURL(bootstrapToken.Token)
 	seed := newGitWorktree(t, "README.md", "initial\n")

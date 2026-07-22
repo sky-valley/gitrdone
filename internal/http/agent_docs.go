@@ -85,11 +85,14 @@ Propose an immutable repository state with POST /v1/repos/{repoID}/proposals usi
   "contentRef": {
     "engine": "git",
     "revision": "<full commit object id>"
-  }
+  },
+  "dependencies": ["version_..."]
 }
 `+"```"+`
 
-A successful proposal response means the change version was durably admitted. The response always identifies the change and version and reports state as admitted. It may also include a completed promotion when approve-all judgement finished during the request. Promotion is an opportunistic current result, not part of the admission guarantee.
+Dependencies are optional exact admitted version IDs. A dependent version may be admitted and inspected while its parents remain held, but it cannot promote until those dependencies have promoted.
+
+A successful proposal response means the change version was durably admitted. The response always identifies the change and version and reports state as admitted. It may also include a completed promotion when approve-all judgement finished during the request. Promotion is an opportunistic current result, not part of the admission guarantee. If judgement cannot finish after admission, the admitted version remains held rather than being reported as lost.
 
 Inspect the durable identity with GET /v1/repos/{repoID}/changes/{changeID}. Read immutable versions with GET /v1/repos/{repoID}/changes/{changeID}/versions. The versions endpoint accepts limit from 1 to 100 and an opaque cursor returned by the previous page.
 
