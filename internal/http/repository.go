@@ -108,8 +108,8 @@ type gitAccessGrant struct {
 type repoCapability string
 
 const (
-	repoCapabilityReadIntent repoCapability = "read-intent"
-	repoCapabilityPropose    repoCapability = "propose"
+	repoCapabilityInspect repoCapability = "inspect"
+	repoCapabilityPropose repoCapability = "propose"
 )
 
 type authorizeRepoAccessInput struct {
@@ -423,7 +423,7 @@ func scopeAllowsGitOperation(scope string, operation gitOperation) bool {
 
 func scopeAllowsRepoCapability(scope string, capability repoCapability) bool {
 	switch capability {
-	case repoCapabilityReadIntent:
+	case repoCapabilityInspect:
 		return scope == "read" || scope == "readwrite"
 	case repoCapabilityPropose:
 		return scope == "write" || scope == "readwrite"

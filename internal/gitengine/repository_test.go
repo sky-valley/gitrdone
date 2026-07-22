@@ -1,4 +1,4 @@
-package gitintent_test
+package gitengine_test
 
 import (
 	"context"
@@ -9,16 +9,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sky-valley/gitrdone/internal/gitintent"
+	"github.com/sky-valley/gitrdone/internal/gitengine"
 	"github.com/sky-valley/gitrdone/internal/intent"
 )
 
 func TestRepositoryAdmitsContentAndAdvancesTrunkWithCompareAndSwap(t *testing.T) {
 	ctx := context.Background()
 	fixture := newGitFixture(t)
-	repository, err := gitintent.OpenRepository(ctx, fixture.gitDir, "refs/heads/main")
+	repository, err := gitengine.OpenAdapter(ctx, fixture.gitDir, "refs/heads/main")
 	if err != nil {
-		t.Fatalf("new git intent repository: %v", err)
+		t.Fatalf("open git engine adapter: %v", err)
 	}
 	versionID := intent.VersionID("version_0123456789abcdef")
 	initial := intent.ContentRef{Engine: "git", Revision: fixture.initial}
@@ -67,9 +67,9 @@ func TestRepositoryAdmitsContentAndAdvancesTrunkWithCompareAndSwap(t *testing.T)
 func TestRepositoryDoesNotHoldMissingContent(t *testing.T) {
 	ctx := context.Background()
 	fixture := newGitFixture(t)
-	repository, err := gitintent.OpenRepository(ctx, fixture.gitDir, "refs/heads/main")
+	repository, err := gitengine.OpenAdapter(ctx, fixture.gitDir, "refs/heads/main")
 	if err != nil {
-		t.Fatalf("new git intent repository: %v", err)
+		t.Fatalf("open git engine adapter: %v", err)
 	}
 	versionID := intent.VersionID("version_missing")
 
@@ -91,7 +91,7 @@ func TestRepositoryDoesNotHoldMissingContent(t *testing.T) {
 
 func TestRepositoryRejectsContentFromAnotherEngine(t *testing.T) {
 	fixture := newGitFixture(t)
-	repository, err := gitintent.OpenRepository(context.Background(), fixture.gitDir, "refs/heads/main")
+	repository, err := gitengine.OpenAdapter(context.Background(), fixture.gitDir, "refs/heads/main")
 	if err != nil {
 		t.Fatalf("open repository: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestRepositoryBootstrapsTrunkExactlyOnce(t *testing.T) {
 	ctx := context.Background()
 	fixture := newGitFixture(t)
 	runGit(t, "--git-dir", fixture.gitDir, "update-ref", "-d", "refs/heads/main")
-	repository, err := gitintent.OpenRepository(ctx, fixture.gitDir, "refs/heads/main")
+	repository, err := gitengine.OpenAdapter(ctx, fixture.gitDir, "refs/heads/main")
 	if err != nil {
 		t.Fatalf("open repository: %v", err)
 	}
@@ -117,10 +117,10 @@ func TestRepositoryBootstrapsTrunkExactlyOnce(t *testing.T) {
 	if err := repository.Bootstrap(ctx, initial); err != nil {
 		t.Fatalf("retry same bootstrap: %v", err)
 	}
-	if err := repository.Bootstrap(ctx, intent.ContentRef{Engine: "git", Revision: fixture.proposed}); !errors.Is(err, gitintent.ErrTrunkAlreadyInitialized) {
+	if err := repository.Bootstrap(ctx, intent.ContentRef{Engine: "git", Revision: fixture.proposed}); !errors.Is(err, gitengine.ErrTrunkAlreadyInitialized) {
 		t.Fatalf("different bootstrap error = %v, want ErrTrunkAlreadyInitialized", err)
 	}
-	if err := repository.Bootstrap(ctx, intent.ContentRef{Engine: "git", Revision: strings.Repeat("f", 40)}); !errors.Is(err, gitintent.ErrTrunkAlreadyInitialized) {
+	if err := repository.Bootstrap(ctx, intent.ContentRef{Engine: "git", Revision: strings.Repeat("f", 40)}); !errors.Is(err, gitengine.ErrTrunkAlreadyInitialized) {
 		t.Fatalf("unavailable second bootstrap error = %v, want ErrTrunkAlreadyInitialized", err)
 	}
 	if got := gitOutput(t, "--git-dir", fixture.gitDir, "rev-parse", "refs/heads/main"); got != fixture.initial {

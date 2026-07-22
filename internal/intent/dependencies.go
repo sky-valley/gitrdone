@@ -28,7 +28,22 @@ func (repository *Repository) ReadyDependents(ctx context.Context) ([]Proposed, 
 		return nil, fmt.Errorf("read current version dependents: %w", err)
 	}
 	ready := make([]Proposed, 0, len(versions))
+	seenChanges := make(map[ChangeID]struct{}, len(versions))
 	for _, version := range versions {
+		if _, seen := seenChanges[version.ChangeID]; seen {
+			continue
+		}
+		latest, found, err := repository.changes.LatestVersion(ctx, version.ChangeID)
+		if err != nil {
+			return nil, fmt.Errorf("read latest dependent version: %w", err)
+		}
+		if !found {
+			return nil, errors.New("dependent change has no recorded version")
+		}
+		if latest.ID != version.ID {
+			continue
+		}
+		seenChanges[version.ChangeID] = struct{}{}
 		if _, promoted, err := repository.promotions.CompletedPromotion(ctx, version.ID); err != nil {
 			return nil, fmt.Errorf("read dependent promotion: %w", err)
 		} else if promoted {

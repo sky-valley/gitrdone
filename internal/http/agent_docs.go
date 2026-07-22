@@ -65,13 +65,13 @@ Administrative control API endpoints require an internal control bearer token. G
 
 Repo tokens are capability grants, not user identity sessions. The token subject is audit context supplied by the caller. Supported repo token scopes are:
 
-- read: clone, fetch, pull, Git LFS downloads, read diff endpoints, read current intent
+- read: clone, fetch, pull, Git LFS downloads, read diff endpoints, read current intent, inspect changes and versions
 - write: push, Git LFS uploads, propose content
 - readwrite: all read and write capabilities; required by grd submit because submission reads current intent and publishes content
 
 Normal Git clients should use Basic auth with username x-access-token and a repo token as the password. Do not persist repo tokens in remote URLs. Bearer auth is also accepted by Git and native intent routes for service callers.
 
-## Native intent API
+## Native repository API
 
 Read the repository's currently accepted content with GET /v1/repos/{repoID}/intent using a read or readwrite repo token, or the control bearer.
 
@@ -90,11 +90,11 @@ Propose an immutable repository state with POST /v1/repos/{repoID}/proposals usi
 }
 `+"```"+`
 
-Dependencies are optional exact admitted version IDs. A dependent version may be admitted and inspected while its parents remain held, but it cannot promote until those dependencies have promoted.
+Dependencies are optional exact admitted version IDs. A dependent version may be admitted and inspected while its parents await promotion, but it cannot promote until those dependencies have promoted.
 
-A successful proposal response means the change version was durably admitted. The response always identifies the change and version and reports state as admitted. It may also include a completed promotion when approve-all judgement finished during the request. Promotion is an opportunistic current result, not part of the admission guarantee. If judgement cannot finish after admission, the admitted version remains held rather than being reported as lost.
+A successful proposal response means the change version was durably admitted. The response always identifies the change and version and reports state as admitted. It may also include a completed promotion when approve-all judgement finished during the request. Promotion is an opportunistic current result, not part of the admission guarantee. Absence of a promotion means judgement is pending; it does not assert a specific hold decision.
 
-Inspect the durable identity with GET /v1/repos/{repoID}/changes/{changeID}. Read immutable versions with GET /v1/repos/{repoID}/changes/{changeID}/versions. The versions endpoint accepts limit from 1 to 100 and an opaque cursor returned by the previous page.
+Inspect the durable identity with GET /v1/repos/{repoID}/changes/{changeID}. The summary reports latestAmendment and latestPromotion only when those outcomes exist. Read immutable versions with GET /v1/repos/{repoID}/changes/{changeID}/versions. The versions endpoint accepts limit from 1 to 100 and an opaque cursor returned by the previous page. Repository amendment is an internal judgement operation, not a public HTTP command.
 
 ## Reliable token creation
 
@@ -134,7 +134,7 @@ Public discovery:
 - GET /sitemap.xml
 - GET /healthz
 
-Control API for trusted services:
+Administrative control API for trusted services:
 
 - POST /v1/repos
 - GET /v1/repos/{repoID}
@@ -142,20 +142,23 @@ Control API for trusted services:
 - GET /v1/repos/{repoID}/tokens
 - POST /v1/repos/{repoID}/tokens/{tokenID}/revoke
 - POST /v1/repos/{repoID}/archive
-- GET /v1/repos/{repoID}/intent
 - PUT /v1/repos/{repoID}/intent
+
+Native repository API:
+
+- GET /v1/repos/{repoID}/intent
 - POST /v1/repos/{repoID}/proposals
 - GET /v1/repos/{repoID}/changes/{changeID}
 - GET /v1/repos/{repoID}/changes/{changeID}/versions
 
-Git smart HTTP for normal Git clients:
+Git smart HTTP adapter for normal Git clients:
 
 - GET /git/repos/{repoID}.git/info/refs?service=git-upload-pack
 - POST /git/repos/{repoID}.git/git-upload-pack
 - GET /git/repos/{repoID}.git/info/refs?service=git-receive-pack
 - POST /git/repos/{repoID}.git/git-receive-pack
 
-Git LFS for normal git-lfs clients:
+Git LFS adapter for normal git-lfs clients:
 
 - POST /git/repos/{repoID}.git/info/lfs/objects/batch
 - PUT /git/repos/{repoID}.git/info/lfs/objects/{oid}
@@ -164,7 +167,7 @@ Git LFS for normal git-lfs clients:
 
 Git LFS lock verification returns an empty conflict set. gitrdone does not provide collaborative LFS locking.
 
-Read-only diff endpoints for service callers:
+Read-only Git adapter diff endpoints for service callers:
 
 - GET /git/repos/{repoID}.git/show/{sha}.diff
 - GET /git/repos/{repoID}.git/compare/{base}..{head}.diff
@@ -219,16 +222,23 @@ Idempotency-Key is required on POST /v1/repos/{repoID}/proposals. A successful p
 - [Full LLM context](%[1]s/llms-full.txt): Same full guide for tools that look for llms-full.txt.
 - [Markdown sitemap](%[1]s/sitemap.md): Agent-readable list of guide and service surfaces.
 
-## API Surface
+## Administrative API Surface
 
 - [Health](%[1]s/healthz): Minimal service health check.
 - [Create repo](%[1]s/v1/repos): POST with control bearer token.
 - [Repo tokens](%[1]s/v1/repos/{repoID}/tokens): POST to create; GET to list metadata with control bearer token.
 - [Revoke repo token](%[1]s/v1/repos/{repoID}/tokens/{tokenID}/revoke): POST with control bearer token.
-- [Current intent](%[1]s/v1/repos/{repoID}/intent): GET the accepted repository content with a read/readwrite repo token or the control bearer.
 - [Bootstrap intent](%[1]s/v1/repos/{repoID}/intent): PUT the first immutable content reference once with the control bearer token.
-- [Propose intent](%[1]s/v1/repos/{repoID}/proposals): POST with a write/readwrite repo token or the control bearer, a base intent, an immutable content reference, and Idempotency-Key.
-- [Inspect changes](%[1]s/v1/repos/{repoID}/changes/{changeID}): GET a change and its bounded version history.
+
+## Native Repository API Surface
+
+- [Current intent](%[1]s/v1/repos/{repoID}/intent): GET the accepted repository content with a read/readwrite repo token or the control bearer.
+- [Admit proposal](%[1]s/v1/repos/{repoID}/proposals): POST a base intent and immutable content reference with a write/readwrite repo token or the control bearer and Idempotency-Key.
+- [Inspect change](%[1]s/v1/repos/{repoID}/changes/{changeID}): GET the durable change identity, latest version, and latest amendment or promotion outcomes when present.
+- [List change versions](%[1]s/v1/repos/{repoID}/changes/{changeID}/versions): GET bounded immutable version history with cursor pagination.
+
+## Git Adapter API Surface
+
 - [Git smart HTTP and LFS](%[1]s/git/repos/{repoID}.git): Use normal Git commands with repo-scoped tokens.
 - [Git diff endpoints](%[1]s/git/repos/{repoID}.git/show/{sha}.diff): Fetch read-scoped patch text without cloning.
 

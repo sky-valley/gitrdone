@@ -110,9 +110,10 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 }
 
 type gitSmartHTTPFixture struct {
-	handler http.Handler
-	server  *httptest.Server
-	repo    createdRepoFixture
+	handler   http.Handler
+	server    *httptest.Server
+	repo      createdRepoFixture
+	judgement *intentservice.Service
 }
 
 type repoTokenFixture struct {
@@ -120,17 +121,17 @@ type repoTokenFixture struct {
 }
 
 func newGitSmartHTTPFixture(t *testing.T, suffix string) gitSmartHTTPFixture {
-	return newGitSmartHTTPFixtureWithTriage(t, suffix, nil)
+	return newGitSmartHTTPFixtureWithDecider(t, suffix, nil)
 }
 
-func newGitSmartHTTPFixtureWithTriage(t *testing.T, suffix string, triage intentservice.Triage) gitSmartHTTPFixture {
+func newGitSmartHTTPFixtureWithDecider(t *testing.T, suffix string, decider intentservice.PromotionDecider) gitSmartHTTPFixture {
 	t.Helper()
 
-	handler, closeHandler := httpapi.NewServerWithClose(httpapi.Config{
-		BaseURL:       "https://git.example.com",
-		ControlBearer: "internal-admin-token",
-		StorageRoot:   t.TempDir(),
-		IntentTriage:  triage,
+	handler, judgement, closeHandler := httpapi.NewTestServerWithClose(httpapi.Config{
+		BaseURL:          "https://git.example.com",
+		ControlBearer:    "internal-admin-token",
+		StorageRoot:      t.TempDir(),
+		PromotionDecider: decider,
 	})
 	t.Cleanup(func() {
 		if err := closeHandler(); err != nil {
@@ -141,9 +142,10 @@ func newGitSmartHTTPFixtureWithTriage(t *testing.T, suffix string, triage intent
 	t.Cleanup(server.Close)
 
 	return gitSmartHTTPFixture{
-		handler: handler,
-		server:  server,
-		repo:    createRepoFixture(t, handler, "git-"+suffix),
+		handler:   handler,
+		server:    server,
+		repo:      createRepoFixture(t, handler, "git-"+suffix),
+		judgement: judgement,
 	}
 }
 

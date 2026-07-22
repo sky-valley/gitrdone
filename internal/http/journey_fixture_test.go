@@ -40,13 +40,13 @@ type journeyCommandResult struct {
 }
 
 func newJourneyWorld(t *testing.T) *journeyWorld {
-	return newJourneyWorldWithTriage(t, nil)
+	return newJourneyWorldWithDecider(t, nil)
 }
 
-func newJourneyWorldWithTriage(t *testing.T, triage intentservice.Triage) *journeyWorld {
+func newJourneyWorldWithDecider(t *testing.T, decider intentservice.PromotionDecider) *journeyWorld {
 	t.Helper()
 
-	server := newGitSmartHTTPFixtureWithTriage(t, "journey", triage)
+	server := newGitSmartHTTPFixtureWithDecider(t, "journey", decider)
 	bootstrapToken := createRepoTokenFixture(t, server.handler, server.repo.ID, "readwrite", "journey-bootstrap")
 	canonicalRemote := server.tokenizedGitURL(bootstrapToken.Token)
 	seed := newGitWorktree(t, "README.md", "initial\n")

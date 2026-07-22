@@ -11,6 +11,7 @@ import (
 const (
 	repositoryInitialized = "repository_initialized"
 	proposalRecorded      = "proposal_recorded"
+	amendmentRecorded     = "amendment_recorded"
 	promotionPrepared     = "promotion_prepared"
 	promotionCompleted    = "promotion_completed"
 	promotionRecorded     = "promotion_recorded"
@@ -23,12 +24,25 @@ type journalState struct {
 	versions    map[intent.VersionID]intent.Version
 	versionIDs  map[intent.ChangeID][]intent.VersionID
 	dependents  map[intent.VersionID][]intent.VersionID
+	amendments  map[intent.VersionID]intent.Amendment
 	promotions  map[intent.PromotionID]intent.Promotion
 	prepared    map[intent.PromotionID]intent.PreparedPromotion
 	pending     intent.PromotionID
 	completed   map[intent.VersionID]intent.PromotionID
 	byIntent    map[intent.RevisionID]intent.PromotionID
-	idempotency map[string]intent.VersionID
+	idempotency map[string]idempotencyRecord
+}
+
+type idempotencyOperation uint8
+
+const (
+	proposalOperation idempotencyOperation = iota + 1
+	amendmentOperation
+)
+
+type idempotencyRecord struct {
+	operation idempotencyOperation
+	versionID intent.VersionID
 }
 
 type journalRecord struct {
@@ -38,6 +52,7 @@ type journalRecord struct {
 	IdempotencyKey string             `json:"idempotency_key,omitempty"`
 	Change         *intent.Change     `json:"change,omitempty"`
 	Version        *intent.Version    `json:"version,omitempty"`
+	Amendment      *intent.Amendment  `json:"amendment,omitempty"`
 	Promotion      *intent.Promotion  `json:"promotion,omitempty"`
 	PromotionID    intent.PromotionID `json:"promotion_id,omitempty"`
 	NextIntent     *intent.Revision   `json:"next_intent,omitempty"`
@@ -52,6 +67,8 @@ func validateRecord(state *journalState, record journalRecord) error {
 		return validateInitialization(state, record)
 	case proposalRecorded:
 		return validateProposal(state, record)
+	case amendmentRecorded:
+		return validateAmendment(state, record)
 	case promotionPrepared:
 		return validatePreparedPromotion(state, record)
 	case promotionCompleted:
@@ -61,6 +78,60 @@ func validateRecord(state *journalState, record journalRecord) error {
 	default:
 		return fmt.Errorf("unknown journal record kind %q", record.Kind)
 	}
+}
+
+func validateAmendment(state *journalState, record journalRecord) error {
+	if state.current.ID == "" {
+		return errors.New("amendment precedes repository initialization")
+	}
+	if record.IdempotencyKey == "" || record.Version == nil || record.Amendment == nil {
+		return errors.New("invalid amendment record")
+	}
+	if existing, ok := state.idempotency[record.IdempotencyKey]; ok {
+		if existing.operation != amendmentOperation {
+			return intent.ErrIdempotencyConflict
+		}
+		existingVersionID := existing.versionID
+		existingVersion, versionFound := state.versions[existingVersionID]
+		existingAmendment, amendmentFound := state.amendments[existingVersionID]
+		if versionFound && amendmentFound && sameVersion(existingVersion, *record.Version) && existingAmendment == *record.Amendment {
+			return nil
+		}
+		return intent.ErrIdempotencyConflict
+	}
+	previous, found := state.versions[record.Amendment.FromVersion]
+	if !found {
+		return errors.New("amendment source version is not recorded")
+	}
+	ids := state.versionIDs[previous.ChangeID]
+	if len(ids) == 0 || ids[len(ids)-1] != previous.ID {
+		return intent.ErrVersionAdvanced
+	}
+	if _, promoted := state.completed[previous.ID]; promoted {
+		return intent.ErrVersionPromotionStarted
+	}
+	for _, prepared := range state.prepared {
+		if prepared.Promotion.VersionID == previous.ID {
+			return intent.ErrVersionPromotionStarted
+		}
+	}
+	if len(state.dependents[previous.ID]) > 0 {
+		return intent.ErrDependentVersionsNeedReconciliation
+	}
+	version := *record.Version
+	if version.ID == "" || version.ChangeID != previous.ChangeID || record.Amendment.ToVersion != version.ID || record.Amendment.Rationale == "" {
+		return errors.New("invalid amendment identity")
+	}
+	if version.BaseIntent != previous.BaseIntent || !slices.Equal(version.Dependencies, previous.Dependencies) {
+		return errors.New("amendment does not preserve version base and dependencies")
+	}
+	if version.Content.Engine == "" || version.Content.Revision == "" || version.Producer == "" {
+		return errors.New("invalid amended version")
+	}
+	if _, found := state.versions[version.ID]; found {
+		return errors.New("duplicate version id")
+	}
+	return nil
 }
 
 func validateInitialization(state *journalState, record journalRecord) error {
@@ -83,9 +154,13 @@ func validateProposal(state *journalState, record journalRecord) error {
 	if record.IdempotencyKey == "" || record.Change == nil || record.Version == nil {
 		return errors.New("invalid proposal record")
 	}
-	if existingVersionID, ok := state.idempotency[record.IdempotencyKey]; ok {
+	if existing, ok := state.idempotency[record.IdempotencyKey]; ok {
+		if existing.operation != proposalOperation {
+			return intent.ErrIdempotencyConflict
+		}
+		existingVersionID := existing.versionID
 		existingVersion, versionFound := state.versions[existingVersionID]
-		existingChange, changeFound := state.changes[record.Change.ID]
+		existingChange, changeFound := state.changes[existingVersion.ChangeID]
 		if versionFound && changeFound && sameVersion(existingVersion, *record.Version) && existingChange == *record.Change {
 			return nil
 		}
@@ -188,7 +263,11 @@ func validatePreparedPromotion(state *journalState, record journalRecord) error 
 		return errors.New("prepared promotion references an unknown version")
 	}
 	if _, exists := state.completed[version.ID]; exists {
-		return errors.New("version already has a completed promotion")
+		return intent.ErrVersionPromotionStarted
+	}
+	ids := state.versionIDs[version.ChangeID]
+	if len(ids) == 0 || ids[len(ids)-1] != version.ID {
+		return intent.ErrVersionAdvanced
 	}
 	if prepared.Promotion.FromIntent != state.current.ID || prepared.Promotion.ToIntent != prepared.Intent.ID || prepared.Intent.PreviousID != state.current.ID || prepared.Intent.Content != version.Content {
 		return errors.New("prepared promotion does not advance current intent to its version content")
@@ -219,11 +298,12 @@ func newJournalState() journalState {
 		versions:    make(map[intent.VersionID]intent.Version),
 		versionIDs:  make(map[intent.ChangeID][]intent.VersionID),
 		dependents:  make(map[intent.VersionID][]intent.VersionID),
+		amendments:  make(map[intent.VersionID]intent.Amendment),
 		promotions:  make(map[intent.PromotionID]intent.Promotion),
 		prepared:    make(map[intent.PromotionID]intent.PreparedPromotion),
 		completed:   make(map[intent.VersionID]intent.PromotionID),
 		byIntent:    make(map[intent.RevisionID]intent.PromotionID),
-		idempotency: make(map[string]intent.VersionID),
+		idempotency: make(map[string]idempotencyRecord),
 	}
 }
 
@@ -242,7 +322,17 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			for _, dependencyID := range record.Version.Dependencies {
 				state.dependents[dependencyID] = append(state.dependents[dependencyID], record.Version.ID)
 			}
-			state.idempotency[record.IdempotencyKey] = record.Version.ID
+			state.idempotency[record.IdempotencyKey] = idempotencyRecord{operation: proposalOperation, versionID: record.Version.ID}
+		}
+	case amendmentRecorded:
+		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
+			state.versions[record.Version.ID] = cloneVersion(*record.Version)
+			state.versionIDs[record.Version.ChangeID] = append(state.versionIDs[record.Version.ChangeID], record.Version.ID)
+			for _, dependencyID := range record.Version.Dependencies {
+				state.dependents[dependencyID] = append(state.dependents[dependencyID], record.Version.ID)
+			}
+			state.amendments[record.Version.ID] = *record.Amendment
+			state.idempotency[record.IdempotencyKey] = idempotencyRecord{operation: amendmentOperation, versionID: record.Version.ID}
 		}
 	case promotionPrepared:
 		if _, exists := state.promotions[record.Promotion.ID]; exists {

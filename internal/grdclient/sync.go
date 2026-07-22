@@ -1,0 +1,148 @@
+package grdclient
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os/exec"
+	"strconv"
+	"strings"
+)
+
+func (client Client) Sync(ctx context.Context, workdir string) error {
+	if client.Stdout == nil {
+		client.Stdout = io.Discard
+	}
+	if client.HTTPClient == nil {
+		client.HTTPClient = http.DefaultClient
+	}
+	status, err := gitOutput(ctx, workdir, "status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("read workspace status: %w", err)
+	}
+	if status != "" {
+		return errors.New("workspace has uncommitted changes; commit or discard them before syncing")
+	}
+
+	origin, err := discoverRemote(ctx, workdir)
+	if err != nil {
+		return err
+	}
+	state, found, err := loadContinuationState(ctx, workdir, origin.repoID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("workspace has no submitted parent awaiting reconciliation")
+	}
+	return client.reconcileAmendedParent(ctx, workdir, origin, state)
+}
+
+func (client Client) reconcileAmendedParent(ctx context.Context, workdir string, origin remote, state continuationState) error {
+	head, err := gitOutput(ctx, workdir, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("read workspace revision: %w", err)
+	}
+	if err := requireSubmittedAncestor(ctx, workdir, state.ParentRevision, head); err != nil {
+		return err
+	}
+
+	change, err := client.change(ctx, origin, state.ParentChange)
+	if err != nil {
+		return err
+	}
+	if change.ID != state.ParentChange {
+		return errors.New("server returned a different submitted change")
+	}
+	if change.LatestAmendment == nil {
+		if change.LatestVersion.ID == state.ParentVersion && change.LatestPromotion == nil {
+			return errors.New("submitted change is awaiting judgement")
+		}
+		return errors.New("submitted change cannot yet be reconciled automatically")
+	}
+	if change.LatestAmendment.FromVersion != state.ParentVersion ||
+		change.LatestAmendment.ToVersion != change.LatestVersion.ID ||
+		strings.TrimSpace(change.LatestAmendment.Rationale) == "" {
+		return errors.New("server returned an invalid amendment lineage")
+	}
+	if change.LatestPromotion == nil || change.LatestPromotion.Version != change.LatestVersion.ID {
+		return errors.New("amended change has not been accepted yet")
+	}
+	if change.LatestVersion.ContentRef.Engine != "git" || change.LatestVersion.ContentRef.Revision == "" {
+		return errors.New("amended change is not represented by Git content")
+	}
+	targetRevision := change.LatestVersion.ContentRef.Revision
+	current, err := client.currentIntent(ctx, origin)
+	if err != nil {
+		return err
+	}
+	if current.ID != change.LatestPromotion.ToIntent || current.ContentRef.Engine != "git" || current.ContentRef.Revision != targetRevision {
+		return errors.New("accepted intent does not match the amended change")
+	}
+
+	if err := gitRun(ctx, workdir, "fetch", "--quiet", "origin"); err != nil {
+		return fmt.Errorf("fetch accepted amendment: %w", err)
+	}
+	if err := gitRun(ctx, workdir, "cat-file", "-e", targetRevision+"^{commit}"); err != nil {
+		return errors.New("accepted amendment is not available from origin")
+	}
+	countText, err := gitOutput(ctx, workdir, "rev-list", "--count", state.ParentRevision+".."+head)
+	if err != nil {
+		return fmt.Errorf("count local continuation: %w", err)
+	}
+	commitCount, err := strconv.Atoi(countText)
+	if err != nil {
+		return errors.New("count local continuation: Git returned an invalid count")
+	}
+	recoveryRef := "refs/grd/recovery/" + head
+	if err := ensureRecoveryRef(ctx, workdir, recoveryRef, head); err != nil {
+		return err
+	}
+
+	if err := gitRun(ctx, workdir, "rebase", "--onto", targetRevision, state.ParentRevision); err != nil {
+		if abortErr := gitRun(ctx, workdir, "rebase", "--abort"); abortErr != nil {
+			return fmt.Errorf("automatic replay conflicted and Git could not restore the workspace; recover from %s", recoveryRef)
+		}
+		return fmt.Errorf("automatic replay conflicted; original work was restored and preserved at %s", recoveryRef)
+	}
+	if err := forgetContinuationState(ctx, workdir, origin.repoID); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(client.Stdout, "Synced: %s\n", state.ParentTitle)
+	fmt.Fprintf(client.Stdout, "Repository amendment: %s\n", change.LatestAmendment.Rationale)
+	if commitCount == 1 {
+		fmt.Fprintln(client.Stdout, "Replayed: 1 local commit")
+	} else {
+		fmt.Fprintf(client.Stdout, "Replayed: %d local commits\n", commitCount)
+	}
+	fmt.Fprintf(client.Stdout, "Recovery: %s\n", recoveryRef)
+	return nil
+}
+
+func requireSubmittedAncestor(ctx context.Context, workdir string, parent string, head string) error {
+	if err := gitRun(ctx, workdir, "merge-base", "--is-ancestor", parent, head); err != nil {
+		return errors.New("workspace is no longer based on its submitted change")
+	}
+	return nil
+}
+
+func ensureRecoveryRef(ctx context.Context, workdir string, ref string, revision string) error {
+	existing, err := gitOutput(ctx, workdir, "rev-parse", "--verify", "--quiet", ref)
+	if err == nil {
+		if existing != revision {
+			return fmt.Errorf("recovery ref %s already protects different work", ref)
+		}
+		return nil
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
+		return fmt.Errorf("inspect recovery ref: %w", err)
+	}
+	if err := gitRun(ctx, workdir, "update-ref", ref, revision, strings.Repeat("0", len(revision))); err != nil {
+		return fmt.Errorf("create recovery ref: %w", err)
+	}
+	return nil
+}

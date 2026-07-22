@@ -772,7 +772,7 @@ There was also a question about whether a Git commit already provides the native
 
 ### Resolution
 
-Submitting B freezes and proposes its current version, then starts successor work C on top of B. This is the default when continuing the same workstream. If B is held, C remains usable and explicitly depends on B.
+Submitting B freezes and proposes its current version, then lets the developer continue on top of B. The next committed work becomes successor C. This is the default when continuing the same workstream. If B awaits promotion, C remains usable and explicitly depends on B.
 
 Starting a new workstream is a separate operation and normally begins from current accepted intent. The client should not ask which behavior is desired after every submission; continuity is the default, while starting independent work is explicit.
 
@@ -796,8 +796,8 @@ A Git commit can provide immutable content for a compatibility adapter, but it d
 
 - create or preserve logical change identity;
 - submit the version for judgement;
-- record held or promoted state;
-- create and track the successor relationship.
+- record the submitted-parent relationship and any known promotion;
+- create and track a durable successor relationship once successor work exists.
 
 The native target is closer to a continuously snapshotted working change: editing evolves the current change, submission freezes a proposed version, and successor work begins immediately. A Git adapter may initially require a clean commit, but that requirement is adapter plumbing rather than the intended product ergonomics.
 
@@ -811,3 +811,40 @@ The native target is closer to a continuously snapshotted working change: editin
 - when the successor receives a durable gitrdone change ID;
 - the exact command and UX for starting an independent workstream;
 - how clients expose recovery when a dependency is amended or rejected.
+
+## Resolution 011: expose stable repository concepts, keep judgement commands internal
+
+**Status:** Agreed and implemented for the current slice
+
+### Reservation
+
+The J3 amendment proof introduced names and an HTTP command that made temporary implementation machinery look like settled product design. `POST /changes/{changeID}/versions` invited callers to drive repository amendment directly. A generic `NextAction` triage interface implied an open-ended workflow engine even though the slice only decides immediate promotion. Change inspection fields named `amendment` and `promotion` implied complete lifecycle state while returning only outcomes for the latest version. The client also interpreted every missing promotion as an explicit hold.
+
+Those names would make the temporary Git adapter and approve-all coordinator harder to replace because callers and future code would begin treating them as native concepts.
+
+### Resolution
+
+The stable native repository API remains:
+
+```text
+GET  /v1/repos/{repoID}/intent
+POST /v1/repos/{repoID}/proposals
+GET  /v1/repos/{repoID}/changes/{changeID}
+GET  /v1/repos/{repoID}/changes/{changeID}/versions
+```
+
+Root-intent `PUT` is an administrative bootstrap exception. Git smart HTTP, LFS, candidate refs, and Git diff endpoints are adapter surfaces. Documentation must list these three surfaces separately.
+
+Repository amendment remains an internal judgement operation. The executable J3 proof reaches it through an in-process test seam, not a production HTTP route. Change inspection exposes `latestAmendment` and `latestPromotion`; immutable version history remains the complete record.
+
+The current judgement seam is deliberately narrow: a `PromotionDecider` receives a `JudgementSubject` containing one change and one immutable version, then returns `PromoteNow` or `DeferPromotion`. This does not claim to model the eventual plans, tools, tests, amendments, human reviews, or multi-step judgement process.
+
+Absence of a completed promotion means only “judgement pending.” It does not prove an explicit hold. The Git client may record a local continuation cursor, but it must not claim to have created a durable empty successor change. `grd status` checks ancestry before saying the workspace is based on accepted intent.
+
+The Git content adapter is named `gitengine`; it admits content and projects trunk but does not own repository intent. The existing `refs/gitrdone/holding/...` path remains unchanged for storage compatibility, while code treats it as an admitted-content ref rather than lifecycle truth.
+
+Promotion and amendment are mutually exclusive terminal transitions for one version. The durable ledger serializes them: amendment rejects a version whose promotion has started, and promotion rejects a superseded version. Idempotency records are operation-typed so an amendment key can never be replayed as a proposal key, including after restart.
+
+### Agreed ownership rule
+
+> Public contracts name durable repository facts. Judgement commands and adapter plumbing stay replaceable until their product shape is earned.

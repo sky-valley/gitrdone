@@ -23,6 +23,12 @@ type ChangeStore interface {
 	RecordProposal(ctx context.Context, idempotencyKey string, change Change, version Version) error
 }
 
+type AmendmentStore interface {
+	Amendment(ctx context.Context, toVersion VersionID) (Amendment, bool, error)
+	AmendmentByIdempotencyKey(ctx context.Context, key string) (Amended, bool, error)
+	RecordAmendment(ctx context.Context, key string, amendment Amendment, version Version) error
+}
+
 type PromotionJournal interface {
 	PendingPromotion(ctx context.Context) (PreparedPromotion, bool, error)
 	CompletedPromotion(ctx context.Context, versionID VersionID) (Promoted, bool, error)
@@ -34,6 +40,7 @@ type PromotionJournal interface {
 type Ledger interface {
 	IntentStore
 	ChangeStore
+	AmendmentStore
 	PromotionJournal
 }
 
@@ -45,12 +52,25 @@ type transientLedger struct {
 	versions    map[VersionID]Version
 	versionIDs  map[ChangeID][]VersionID
 	dependents  map[VersionID][]VersionID
+	amendments  map[VersionID]Amendment
 	promotions  map[PromotionID]Promotion
 	prepared    map[PromotionID]PreparedPromotion
 	pending     PromotionID
 	completed   map[VersionID]PromotionID
 	byIntent    map[RevisionID]PromotionID
-	idempotency map[string]VersionID
+	idempotency map[string]transientIdempotencyRecord
+}
+
+type transientIdempotencyOperation uint8
+
+const (
+	transientProposalOperation transientIdempotencyOperation = iota + 1
+	transientAmendmentOperation
+)
+
+type transientIdempotencyRecord struct {
+	operation transientIdempotencyOperation
+	versionID VersionID
 }
 
 func (ledger *transientLedger) CurrentIntent(context.Context) (Revision, bool, error) {
@@ -91,6 +111,32 @@ func (ledger *transientLedger) Dependents(_ context.Context, id VersionID) ([]Ve
 	return versions, nil
 }
 
+func (ledger *transientLedger) Amendment(_ context.Context, toVersion VersionID) (Amendment, bool, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	amendment, found := ledger.amendments[toVersion]
+	return amendment, found, nil
+}
+
+func (ledger *transientLedger) AmendmentByIdempotencyKey(_ context.Context, key string) (Amended, bool, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	record, found := ledger.idempotency[key]
+	if !found {
+		return Amended{}, false, nil
+	}
+	if record.operation != transientAmendmentOperation {
+		return Amended{}, false, ErrIdempotencyConflict
+	}
+	versionID := record.versionID
+	amendment, amended := ledger.amendments[versionID]
+	if !amended {
+		return Amended{}, false, ErrIdempotencyConflict
+	}
+	version := cloneVersion(ledger.versions[versionID])
+	return Amended{Change: ledger.changes[version.ChangeID], Version: version, Amendment: amendment}, true, nil
+}
+
 func (ledger *transientLedger) LatestVersion(_ context.Context, changeID ChangeID) (Version, bool, error) {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
@@ -129,10 +175,14 @@ func (ledger *transientLedger) Versions(_ context.Context, changeID ChangeID, af
 func (ledger *transientLedger) ProposalByIdempotencyKey(_ context.Context, key string) (Proposed, bool, error) {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
-	versionID, found := ledger.idempotency[key]
+	record, found := ledger.idempotency[key]
 	if !found {
 		return Proposed{}, false, nil
 	}
+	if record.operation != transientProposalOperation {
+		return Proposed{}, false, ErrIdempotencyConflict
+	}
+	versionID := record.versionID
 	version := cloneVersion(ledger.versions[versionID])
 	return Proposed{Change: ledger.changes[version.ChangeID], Version: version}, true, nil
 }
@@ -175,24 +225,117 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.versions = make(map[VersionID]Version)
 	ledger.versionIDs = make(map[ChangeID][]VersionID)
 	ledger.dependents = make(map[VersionID][]VersionID)
+	ledger.amendments = make(map[VersionID]Amendment)
 	ledger.promotions = make(map[PromotionID]Promotion)
 	ledger.prepared = make(map[PromotionID]PreparedPromotion)
 	ledger.completed = make(map[VersionID]PromotionID)
 	ledger.byIntent = make(map[RevisionID]PromotionID)
-	ledger.idempotency = make(map[string]VersionID)
+	ledger.idempotency = make(map[string]transientIdempotencyRecord)
 	return nil
 }
 
 func (ledger *transientLedger) RecordProposal(_ context.Context, key string, change Change, version Version) error {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
+	if existing, found := ledger.idempotency[key]; found {
+		existingVersion, versionFound := ledger.versions[existing.versionID]
+		existingChange, changeFound := ledger.changes[existingVersion.ChangeID]
+		if existing.operation == transientProposalOperation &&
+			versionFound && changeFound &&
+			existingChange == change && versionsEqual(existingVersion, version) {
+			return nil
+		}
+		return ErrIdempotencyConflict
+	}
+	if change.ID == "" || version.ID == "" || version.ChangeID != change.ID {
+		return errors.New("invalid proposal identity")
+	}
+	if _, found := ledger.revisions[version.BaseIntent]; !found {
+		return errors.New("proposal base intent is not recorded")
+	}
+	if version.Content.Engine == "" || version.Content.Revision == "" || version.Producer == "" {
+		return errors.New("invalid proposal version")
+	}
+	if _, found := ledger.changes[change.ID]; found {
+		return errors.New("duplicate change id")
+	}
+	if _, found := ledger.versions[version.ID]; found {
+		return errors.New("duplicate version id")
+	}
+	seenDependencies := make(map[VersionID]struct{}, len(version.Dependencies))
+	for _, dependencyID := range version.Dependencies {
+		if dependencyID == "" {
+			return errors.New("invalid proposal dependency")
+		}
+		if _, duplicate := seenDependencies[dependencyID]; duplicate {
+			return errors.New("duplicate proposal dependency")
+		}
+		seenDependencies[dependencyID] = struct{}{}
+		if _, found := ledger.versions[dependencyID]; !found {
+			return errors.New("proposal dependency is not recorded")
+		}
+	}
 	ledger.changes[change.ID] = change
 	ledger.versions[version.ID] = cloneVersion(version)
 	ledger.versionIDs[change.ID] = append(ledger.versionIDs[change.ID], version.ID)
 	for _, dependencyID := range version.Dependencies {
 		ledger.dependents[dependencyID] = append(ledger.dependents[dependencyID], version.ID)
 	}
-	ledger.idempotency[key] = version.ID
+	ledger.idempotency[key] = transientIdempotencyRecord{operation: transientProposalOperation, versionID: version.ID}
+	return nil
+}
+
+func (ledger *transientLedger) RecordAmendment(_ context.Context, key string, amendment Amendment, version Version) error {
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if existing, found := ledger.idempotency[key]; found {
+		existingVersion, versionFound := ledger.versions[existing.versionID]
+		existingAmendment, amendmentFound := ledger.amendments[existing.versionID]
+		if existing.operation == transientAmendmentOperation &&
+			versionFound && amendmentFound &&
+			existingAmendment == amendment && versionsEqual(existingVersion, version) {
+			return nil
+		}
+		return ErrIdempotencyConflict
+	}
+	previous, found := ledger.versions[amendment.FromVersion]
+	if !found {
+		return ErrVersionNotFound
+	}
+	ids := ledger.versionIDs[previous.ChangeID]
+	if len(ids) == 0 || ids[len(ids)-1] != previous.ID {
+		return ErrVersionAdvanced
+	}
+	if len(ledger.dependents[previous.ID]) > 0 {
+		return ErrDependentVersionsNeedReconciliation
+	}
+	if _, promoted := ledger.completed[previous.ID]; promoted {
+		return ErrVersionPromotionStarted
+	}
+	for _, prepared := range ledger.prepared {
+		if prepared.Promotion.VersionID == previous.ID {
+			return ErrVersionPromotionStarted
+		}
+	}
+	if version.ID == "" || version.ChangeID != previous.ChangeID || amendment.ToVersion != version.ID || amendment.Rationale == "" {
+		return errors.New("invalid amendment identity")
+	}
+	if version.BaseIntent != previous.BaseIntent || !slices.Equal(version.Dependencies, previous.Dependencies) {
+		return errors.New("amendment does not preserve version base and dependencies")
+	}
+	if version.Content.Engine == "" || version.Content.Revision == "" || version.Producer == "" {
+		return errors.New("invalid amended version")
+	}
+	if _, found := ledger.versions[version.ID]; found {
+		return errors.New("duplicate version id")
+	}
+	ledger.versions[version.ID] = cloneVersion(version)
+	ledger.versionIDs[version.ChangeID] = append(ledger.versionIDs[version.ChangeID], version.ID)
+	for _, dependencyID := range version.Dependencies {
+		ledger.dependents[dependencyID] = append(ledger.dependents[dependencyID], version.ID)
+	}
+	ledger.amendments[version.ID] = amendment
+	ledger.idempotency[key] = transientIdempotencyRecord{operation: transientAmendmentOperation, versionID: version.ID}
 	return nil
 }
 
@@ -201,11 +344,46 @@ func cloneVersion(version Version) Version {
 	return version
 }
 
+func versionsEqual(left, right Version) bool {
+	return left.ID == right.ID &&
+		left.ChangeID == right.ChangeID &&
+		left.BaseIntent == right.BaseIntent &&
+		left.Content == right.Content &&
+		left.Producer == right.Producer &&
+		slices.Equal(left.Dependencies, right.Dependencies)
+}
+
 func (ledger *transientLedger) PreparePromotion(_ context.Context, prepared PreparedPromotion) error {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
+	if existing, found := ledger.prepared[prepared.Promotion.ID]; found {
+		if existing == prepared {
+			return nil
+		}
+		return errors.New("promotion id is already prepared differently")
+	}
 	if ledger.pending != "" && ledger.pending != prepared.Promotion.ID {
 		return ErrPromotionPending
+	}
+	version, found := ledger.versions[prepared.Promotion.VersionID]
+	if !found {
+		return ErrVersionNotFound
+	}
+	ids := ledger.versionIDs[version.ChangeID]
+	if len(ids) == 0 || ids[len(ids)-1] != version.ID {
+		return ErrVersionAdvanced
+	}
+	if _, completed := ledger.completed[version.ID]; completed {
+		return ErrVersionPromotionStarted
+	}
+	if prepared.Promotion.FromIntent != ledger.current.ID ||
+		prepared.Promotion.ToIntent != prepared.Intent.ID ||
+		prepared.Intent.PreviousID != ledger.current.ID ||
+		prepared.Intent.Content != version.Content {
+		return errors.New("prepared promotion does not advance current intent to its version content")
+	}
+	if _, found := ledger.revisions[prepared.Intent.ID]; found {
+		return errors.New("duplicate intent revision id")
 	}
 	ledger.prepared[prepared.Promotion.ID] = prepared
 	ledger.pending = prepared.Promotion.ID

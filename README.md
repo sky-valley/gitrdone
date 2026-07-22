@@ -84,9 +84,9 @@ server graceful shutdown semantics.
 - With `GITRDONE_DATABASE_URL`, repo metadata, token hashes, token lifecycle timestamps, and idempotency records are stored in Postgres.
 - Bare repos still need durable filesystem storage even when Postgres is enabled.
 
-## Control API
+## Administrative control API
 
-All `/v1` routes require:
+Repository creation, token management, archival, and root-intent bootstrap require:
 
 ```http
 Authorization: Bearer <GITRDONE_CONTROL_BEARER>
@@ -126,7 +126,7 @@ Token scopes:
 
 | Scope | Allows |
 | --- | --- |
-| `read` | clone, fetch, pull, Git LFS downloads, read diff endpoints, read current intent |
+| `read` | clone, fetch, pull, Git LFS downloads, read diff endpoints, read current intent, inspect changes and versions |
 | `write` | push, Git LFS uploads, propose content |
 | `readwrite` | all read and write capabilities; required by `grd submit` |
 
@@ -153,9 +153,24 @@ GET  /v1/repos/{repoID}
 POST /v1/repos/{repoID}/archive
 ```
 
-## Native Intent Access
+Root-intent bootstrap is the administrative exception on the intent path:
 
-`GET /v1/repos/{repoID}/intent` accepts a `read` or `readwrite` repo token and returns the currently accepted content. `POST /v1/repos/{repoID}/proposals` accepts a `write` or `readwrite` repo token plus `Idempotency-Key`; the admitted producer is derived from the token subject rather than request JSON. A proposal may include `dependencies`, an array of exact admitted version IDs that must promote before the dependent version can promote. The control bearer remains accepted on both routes for trusted service callers. Root-intent bootstrap remains control-only.
+```text
+PUT /v1/repos/{repoID}/intent
+```
+
+## Native repository API
+
+`GET /v1/repos/{repoID}/intent`, `GET /v1/repos/{repoID}/changes/{changeID}`, and the corresponding `/versions` collection accept a `read` or `readwrite` repo token. `POST /v1/repos/{repoID}/proposals` accepts a `write` or `readwrite` repo token plus `Idempotency-Key`; the admitted producer is derived from the token subject rather than request JSON. A proposal may include `dependencies`, an array of exact admitted version IDs that must promote before the dependent version can promote. The control bearer remains accepted on these routes for trusted service callers. Root-intent bootstrap remains control-only.
+
+```text
+GET  /v1/repos/{repoID}/intent
+POST /v1/repos/{repoID}/proposals
+GET  /v1/repos/{repoID}/changes/{changeID}
+GET  /v1/repos/{repoID}/changes/{changeID}/versions
+```
+
+Repository amendment is an internal judgement operation, not a public command. Change inspection exposes `latestAmendment` and `latestPromotion` when those outcomes exist; the bounded versions collection preserves the immutable history.
 
 ## grd client
 
@@ -165,11 +180,12 @@ Build the thin client and run it inside a clean Git workspace whose `origin` is 
 go build -o grd ./cmd/grd
 grd submit
 grd status
+grd sync
 ```
 
-`grd submit` publishes the current committed content and admits it for judgement. Immediate promotion is reported directly. When a version remains held, the client records a local continuation cursor so subsequent work can be submitted with an explicit dependency on that exact version. `grd status` shows the last known relationship between the active workspace and its submitted parent. The current Git adapter still requires a clean committed workspace; automatic working-change snapshots remain a native-client target.
+`grd submit` publishes the current committed content and admits it for judgement. Immediate promotion is reported directly. Otherwise the client reports judgement as pending and records a local continuation cursor so subsequent work can be submitted with an explicit dependency on that exact version. `grd status` shows the last known relationship between the active workspace and its submitted parent, and only claims it is based on accepted intent after checking Git ancestry. If the repository amends and promotes that submitted version, `grd sync` fetches the accepted version, creates a recovery ref, replays clean local successor commits, and explains the repository rationale. The current Git adapter still requires a clean committed workspace; durable conflict handling and automatic working-change snapshots remain native-client targets.
 
-## Git Access
+## Git adapter access
 
 Canonical remote URL:
 
@@ -184,10 +200,9 @@ Git routes accept repo tokens via Basic auth or Bearer auth. For local automatio
 ```bash
 git -c http.extraHeader="Authorization: Bearer ${REPO_TOKEN}" \
   clone "${GIT_URL}" worktree
-
-git -C worktree -c http.extraHeader="Authorization: Bearer ${REPO_TOKEN}" \
-  push origin main
 ```
+
+Direct pushes to the canonical branch are rejected because they would bypass repository judgement. Make the repo token available through a Git credential helper, commit the intended content, then run `grd submit`. The current client publishes content to a temporary candidate ref and requests native admission; only promotion may move canonical `main`.
 
 Normal Git clients can also use Basic auth with username `x-access-token` and the repo token as the password. Do not persist repo tokens in remote URLs.
 

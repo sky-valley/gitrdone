@@ -19,7 +19,7 @@ const defaultVersionPageSize = 50
 type Handlers struct {
 	CurrentIntent http.Handler
 	Bootstrap     http.Handler
-	Propose       http.Handler
+	AdmitProposal http.Handler
 	GetChange     http.Handler
 	ListVersions  http.Handler
 }
@@ -28,7 +28,7 @@ func NewHandlers(service *intentservice.Service) Handlers {
 	return Handlers{
 		CurrentIntent: currentIntentHandler(service),
 		Bootstrap:     bootstrapHandler(service),
-		Propose:       proposeHandler(service),
+		AdmitProposal: admitProposalHandler(service),
 		GetChange:     getChangeHandler(service),
 		ListVersions:  listVersionsHandler(service),
 	}
@@ -108,9 +108,16 @@ type changeIdentityResponse struct {
 }
 
 type changeSummaryResponse struct {
-	ID            string             `json:"id"`
-	LatestVersion versionResponse    `json:"latestVersion"`
-	Promotion     *promotionResponse `json:"promotion,omitempty"`
+	ID              string             `json:"id"`
+	LatestVersion   versionResponse    `json:"latestVersion"`
+	LatestAmendment *amendmentResponse `json:"latestAmendment,omitempty"`
+	LatestPromotion *promotionResponse `json:"latestPromotion,omitempty"`
+}
+
+type amendmentResponse struct {
+	FromVersion string `json:"fromVersion"`
+	ToVersion   string `json:"toVersion"`
+	Rationale   string `json:"rationale"`
 }
 
 type versionResponse struct {
@@ -150,7 +157,7 @@ func currentIntentHandler(service *intentservice.Service) http.Handler {
 	})
 }
 
-func proposeHandler(service *intentservice.Service) http.Handler {
+func admitProposalHandler(service *intentservice.Service) http.Handler {
 	type requestBody struct {
 		BaseIntent   string   `json:"baseIntent"`
 		Dependencies []string `json:"dependencies,omitempty"`
@@ -252,9 +259,13 @@ func getChangeHandler(service *intentservice.Service) http.Handler {
 			ID:            string(inspection.Change.ID),
 			LatestVersion: mapVersion(inspection.LatestVersion),
 		}
-		if inspection.Promotion != nil {
-			mapped := mapPromotion(inspection.Promotion.Promotion)
-			response.Promotion = &mapped
+		if inspection.LatestAmendment != nil {
+			mapped := mapAmendment(*inspection.LatestAmendment)
+			response.LatestAmendment = &mapped
+		}
+		if inspection.LatestPromotion != nil {
+			mapped := mapPromotion(inspection.LatestPromotion.Promotion)
+			response.LatestPromotion = &mapped
 		}
 		writeJSON(w, http.StatusOK, response)
 	})
@@ -427,5 +438,13 @@ func mapPromotion(promotion intent.Promotion) promotionResponse {
 		FromIntent: string(promotion.FromIntent),
 		ToIntent:   string(promotion.ToIntent),
 		Version:    string(promotion.VersionID),
+	}
+}
+
+func mapAmendment(amendment intent.Amendment) amendmentResponse {
+	return amendmentResponse{
+		FromVersion: string(amendment.FromVersion),
+		ToVersion:   string(amendment.ToVersion),
+		Rationale:   amendment.Rationale,
 	}
 }

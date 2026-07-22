@@ -13,7 +13,7 @@ type Config struct {
 	BaseURL              string
 	ControlBearer        string
 	StorageRoot          string
-	IntentTriage         intentservice.Triage
+	PromotionDecider     intentservice.PromotionDecider
 	MaxLFSObjectBytes    int64
 	AccessLog            io.Writer
 	TrustedProxyPrefixes []netip.Prefix
@@ -37,6 +37,17 @@ func NewServerWithStores(config Config, repos repoStore, idempotency idempotency
 }
 
 func newServerWithStores(config Config, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) (http.Handler, func() error) {
+	resources := buildServer(config, repos, idempotency, gitStorage)
+	return resources.handler, resources.close
+}
+
+type serverResources struct {
+	handler   http.Handler
+	judgement *intentservice.Service
+	close     func() error
+}
+
+func buildServer(config Config, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) serverResources {
 	control := func(handler http.Handler) http.Handler {
 		return controlAuth(config.ControlBearer, handler)
 	}
@@ -44,7 +55,8 @@ func newServerWithStores(config Config, repos repoStore, idempotency idempotency
 		idempotency = newMemoryIdempotencyStore(nil)
 	}
 	intentRepositories := newIntentRepositoryRegistry(config.StorageRoot, repos, gitStorage)
-	intentHandlers := intentapi.NewHandlers(intentservice.NewWithTriage(intentRepositories, config.IntentTriage))
+	judgement := intentservice.NewWithPromotionDecider(intentRepositories, config.PromotionDecider)
+	intentHandlers := intentapi.NewHandlers(judgement)
 
 	mux := NewMux(Handlers{
 		AgentDocs:       agentDocsHandler(config.BaseURL),
@@ -55,18 +67,20 @@ func newServerWithStores(config Config, repos repoStore, idempotency idempotency
 		CreateRepoToken: control(createRepoTokenHandler(repos, idempotency, config.BaseURL)),
 		ListRepoTokens:  control(listRepoTokensHandler(repos)),
 		RevokeRepoToken: control(revokeRepoTokenHandler(repos)),
-		CurrentIntent:   intentAccessAuth(config.ControlBearer, repos, repoCapabilityReadIntent, intentHandlers.CurrentIntent),
+		CurrentIntent:   repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.CurrentIntent),
 		BootstrapIntent: control(intentHandlers.Bootstrap),
-		ProposeIntent:   intentAccessAuth(config.ControlBearer, repos, repoCapabilityPropose, intentHandlers.Propose),
-		GetChange:       control(intentHandlers.GetChange),
-		ListVersions:    control(intentHandlers.ListVersions),
+		AdmitProposal:   repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityPropose, intentHandlers.AdmitProposal),
+		GetChange:       repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.GetChange),
+		ListVersions:    repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.ListVersions),
 		GitSmartHTTP:    gitSmartHTTPHandler(repos, execGitHTTPBackend{}),
 		GitLFS:          gitLFSHandler(repos, newFilesystemLFSObjectStore(config.StorageRoot), config.MaxLFSObjectBytes),
 		GitShowDiff:     gitDiffHandler(repos, execGitDiffBackend{}, gitDiffShow),
 		GitCompareDiff:  gitDiffHandler(repos, execGitDiffBackend{}, gitDiffCompare),
 	})
-	return accessLog(config.AccessLog, config.TrustedProxyPrefixes, mux), func() error {
-		return intentRepositories.Close()
+	return serverResources{
+		handler:   accessLog(config.AccessLog, config.TrustedProxyPrefixes, mux),
+		judgement: judgement,
+		close:     intentRepositories.Close,
 	}
 }
 

@@ -2,6 +2,8 @@ package httpapi_test
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -11,9 +13,40 @@ import (
 	"github.com/sky-valley/gitrdone/internal/intentservice"
 )
 
+func TestStatusKeepsPendingChangeWhenDifferentChangePromotesTheSameContent(t *testing.T) {
+	world := newJourneyWorldWithDecider(t, &deferThenPromoteDecider{})
+	ion := world.cloneWorkspace("ion")
+	base := world.currentIntent()
+	grd := world.buildGRD()
+	revision := ion.commitFile("same-content.txt", "same content\n", "submit same content")
+	if result := ion.run(grd, "submit"); result.err != nil {
+		t.Fatalf("submit first change: %v\n%s", result.err, result.stderr)
+	}
+
+	body := fmt.Sprintf(`{"baseIntent":%q,"contentRef":{"engine":"git","revision":%q}}`, base.ID, revision)
+	res, responseBody := requestWithHeaders(t, world.server.handler, http.MethodPost, "/v1/repos/"+world.server.repo.ID+"/proposals", map[string]string{
+		"Authorization":   repoBasicAuthorization(ion.token),
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "different-change-same-content",
+	}, body)
+	requireStatus(t, res, responseBody, http.StatusOK)
+	if got := world.currentIntent().ContentRef.Revision; got != revision {
+		t.Fatalf("accepted revision = %q, want duplicate content %q", got, revision)
+	}
+
+	status := ion.run(grd, "status")
+	if status.err != nil {
+		t.Fatalf("read first change status: %v\n%s", status.err, status.stderr)
+	}
+	const wantStatus = "Working: new change\nBased on:\n  submit same content — judgement pending\n"
+	if status.stdout != wantStatus {
+		t.Fatalf("first change status = %q, want %q", status.stdout, wantStatus)
+	}
+}
+
 func TestJourneyJ20HoldContinueAndSubmitDependentChange(t *testing.T) {
-	triage := &recordingHoldTriage{}
-	world := newJourneyWorldWithTriage(t, triage)
+	decider := &recordingDeferDecider{}
+	world := newJourneyWorldWithDecider(t, decider)
 	ion := world.cloneWorkspace("ion")
 	accepted := world.currentIntent()
 	grd := world.buildGRD()
@@ -23,7 +56,7 @@ func TestJourneyJ20HoldContinueAndSubmitDependentChange(t *testing.T) {
 	if first.err != nil {
 		t.Fatalf("submit held parent: %v\nstderr:\n%s", first.err, first.stderr)
 	}
-	const wantFirst = "Submitted: refactor authentication\nHeld\nStarted a new working change on top of it.\n"
+	const wantFirst = "Submitted: refactor authentication\nAdmitted; judgement pending\nContinue working on top of it.\n"
 	if first.stdout != wantFirst {
 		t.Fatalf("first submit stdout = %q, want %q", first.stdout, wantFirst)
 	}
@@ -45,7 +78,7 @@ func TestJourneyJ20HoldContinueAndSubmitDependentChange(t *testing.T) {
 	if status.err != nil {
 		t.Fatalf("status after held submit: %v\nstderr:\n%s", status.err, status.stderr)
 	}
-	const wantEmptySuccessor = "Working: new change\nBased on:\n  refactor authentication — held\n"
+	const wantEmptySuccessor = "Working: new change\nBased on:\n  refactor authentication — judgement pending\n"
 	if status.stdout != wantEmptySuccessor {
 		t.Fatalf("status stdout = %q, want %q", status.stdout, wantEmptySuccessor)
 	}
@@ -55,7 +88,7 @@ func TestJourneyJ20HoldContinueAndSubmitDependentChange(t *testing.T) {
 	if status.err != nil {
 		t.Fatalf("status with dependent work: %v\nstderr:\n%s", status.err, status.stderr)
 	}
-	const wantDependentStatus = "Working: add passkey support\nBased on:\n  refactor authentication — held\n"
+	const wantDependentStatus = "Working: add passkey support\nBased on:\n  refactor authentication — judgement pending\n"
 	if status.stdout != wantDependentStatus {
 		t.Fatalf("dependent status stdout = %q, want %q", status.stdout, wantDependentStatus)
 	}
@@ -64,14 +97,14 @@ func TestJourneyJ20HoldContinueAndSubmitDependentChange(t *testing.T) {
 	if second.err != nil {
 		t.Fatalf("submit dependent change: %v\nstderr:\n%s", second.err, second.stderr)
 	}
-	const wantSecond = "Submitted: add passkey support\nWaiting on: refactor authentication\nStarted a new working change on top of it.\n"
+	const wantSecond = "Submitted: add passkey support\nAdmitted; judgement pending\nWaiting on: refactor authentication\nContinue working on top of it.\n"
 	if second.stdout != wantSecond {
 		t.Fatalf("second submit stdout = %q, want %q", second.stdout, wantSecond)
 	}
 
-	observed := triage.observed()
+	observed := decider.observed()
 	if len(observed) != 3 {
-		t.Fatalf("triaged proposals = %d, want 3 including held retry", len(observed))
+		t.Fatalf("observed proposals = %d, want 3 including pending retry", len(observed))
 	}
 	if len(observed[0].Version.Dependencies) != 0 {
 		t.Fatalf("parent dependencies = %q, want none", observed[0].Version.Dependencies)
@@ -88,7 +121,7 @@ func TestJourneyJ20HoldContinueAndSubmitDependentChange(t *testing.T) {
 }
 
 func TestHeldSubmissionCanPromoteWithoutLeavingAStaleWorkspaceDependency(t *testing.T) {
-	world := newJourneyWorldWithTriage(t, &holdThenPromoteTriage{})
+	world := newJourneyWorldWithDecider(t, &deferThenPromoteDecider{})
 	ion := world.cloneWorkspace("ion")
 	grd := world.buildGRD()
 	ion.commitFile("auth.txt", "shared authentication base\n", "refactor authentication")
@@ -117,13 +150,13 @@ func TestHeldSubmissionCanPromoteWithoutLeavingAStaleWorkspaceDependency(t *test
 }
 
 func TestJourneyJ22PromotingParentReconsidersSubmittedDependent(t *testing.T) {
-	triage := &journeyDependencyTriage{}
-	world := newJourneyWorldWithTriage(t, triage)
+	decider := &journeyDependencyDecider{}
+	world := newJourneyWorldWithDecider(t, decider)
 	ion := world.cloneWorkspace("ion")
 	grd := world.buildGRD()
 
 	parentRevision := ion.commitFile("auth.txt", "shared authentication base\n", "refactor authentication")
-	triage.parentRevision = parentRevision
+	decider.parentRevision = parentRevision
 	parent := ion.run(grd, "submit")
 	if parent.err != nil {
 		t.Fatalf("submit held parent: %v\nstderr:\n%s", parent.err, parent.stderr)
@@ -133,7 +166,7 @@ func TestJourneyJ22PromotingParentReconsidersSubmittedDependent(t *testing.T) {
 	if dependent.err != nil {
 		t.Fatalf("submit waiting dependent: %v\nstderr:\n%s", dependent.err, dependent.stderr)
 	}
-	const wantWaiting = "Submitted: add passkey support\nWaiting on: refactor authentication\nStarted a new working change on top of it.\n"
+	const wantWaiting = "Submitted: add passkey support\nAdmitted; judgement pending\nWaiting on: refactor authentication\nContinue working on top of it.\n"
 	if dependent.stdout != wantWaiting {
 		t.Fatalf("dependent submit stdout = %q, want %q", dependent.stdout, wantWaiting)
 	}
@@ -159,9 +192,9 @@ func TestJourneyJ22PromotingParentReconsidersSubmittedDependent(t *testing.T) {
 	if got := world.currentIntent().ContentRef.Revision; got != dependentRevision {
 		t.Fatalf("current intent revision = %q, want dependent %q", got, dependentRevision)
 	}
-	parentCalls, dependentCalls := triage.calls()
+	parentCalls, dependentCalls := decider.calls()
 	if parentCalls != 2 || dependentCalls != 2 {
-		t.Fatalf("triage calls = parent %d, dependent %d; want 2 initial/reconsideration calls each", parentCalls, dependentCalls)
+		t.Fatalf("decision calls = parent %d, dependent %d; want 2 initial/reconsideration calls each", parentCalls, dependentCalls)
 	}
 	status := ion.run(grd, "status")
 	if status.err != nil {
@@ -173,62 +206,64 @@ func TestJourneyJ22PromotingParentReconsidersSubmittedDependent(t *testing.T) {
 	}
 }
 
-type recordingHoldTriage struct {
+type recordingDeferDecider struct {
 	mu        sync.Mutex
 	proposals []intent.Proposed
 }
 
-func (triage *recordingHoldTriage) DecideNext(_ context.Context, proposed intent.Proposed) (intentservice.NextAction, error) {
-	triage.mu.Lock()
-	defer triage.mu.Unlock()
-	triage.proposals = append(triage.proposals, proposed)
-	return intentservice.Hold, nil
+func (decider *recordingDeferDecider) DecidePromotion(_ context.Context, subject intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
+	decider.mu.Lock()
+	defer decider.mu.Unlock()
+	proposed := intent.Proposed{Change: subject.Change, Version: subject.Version}
+	decider.proposals = append(decider.proposals, proposed)
+	return intentservice.DeferPromotion, nil
 }
 
-func (triage *recordingHoldTriage) observed() []intent.Proposed {
-	triage.mu.Lock()
-	defer triage.mu.Unlock()
-	return slices.Clone(triage.proposals)
+func (decider *recordingDeferDecider) observed() []intent.Proposed {
+	decider.mu.Lock()
+	defer decider.mu.Unlock()
+	return slices.Clone(decider.proposals)
 }
 
-type holdThenPromoteTriage struct {
+type deferThenPromoteDecider struct {
 	mu    sync.Mutex
 	calls int
 }
 
-func (triage *holdThenPromoteTriage) DecideNext(context.Context, intent.Proposed) (intentservice.NextAction, error) {
-	triage.mu.Lock()
-	defer triage.mu.Unlock()
-	triage.calls++
-	if triage.calls == 1 {
-		return intentservice.Hold, nil
+func (decider *deferThenPromoteDecider) DecidePromotion(context.Context, intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
+	decider.mu.Lock()
+	defer decider.mu.Unlock()
+	decider.calls++
+	if decider.calls == 1 {
+		return intentservice.DeferPromotion, nil
 	}
-	return intentservice.Promote, nil
+	return intentservice.PromoteNow, nil
 }
 
-type journeyDependencyTriage struct {
+type journeyDependencyDecider struct {
 	mu             sync.Mutex
 	parentRevision string
 	parentCalls    int
 	dependentCalls int
 }
 
-func (triage *journeyDependencyTriage) DecideNext(_ context.Context, proposed intent.Proposed) (intentservice.NextAction, error) {
-	triage.mu.Lock()
-	defer triage.mu.Unlock()
-	if proposed.Version.Content.Revision == triage.parentRevision {
-		triage.parentCalls++
-		if triage.parentCalls == 1 {
-			return intentservice.Hold, nil
+func (decider *journeyDependencyDecider) DecidePromotion(_ context.Context, subject intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
+	decider.mu.Lock()
+	defer decider.mu.Unlock()
+	proposed := intent.Proposed{Change: subject.Change, Version: subject.Version}
+	if proposed.Version.Content.Revision == decider.parentRevision {
+		decider.parentCalls++
+		if decider.parentCalls == 1 {
+			return intentservice.DeferPromotion, nil
 		}
-		return intentservice.Promote, nil
+		return intentservice.PromoteNow, nil
 	}
-	triage.dependentCalls++
-	return intentservice.Promote, nil
+	decider.dependentCalls++
+	return intentservice.PromoteNow, nil
 }
 
-func (triage *journeyDependencyTriage) calls() (int, int) {
-	triage.mu.Lock()
-	defer triage.mu.Unlock()
-	return triage.parentCalls, triage.dependentCalls
+func (decider *journeyDependencyDecider) calls() (int, int) {
+	decider.mu.Lock()
+	defer decider.mu.Unlock()
+	return decider.parentCalls, decider.dependentCalls
 }

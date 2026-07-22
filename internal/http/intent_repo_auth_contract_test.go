@@ -25,6 +25,9 @@ func TestRepositoryPrincipalCanReadIntentAndProposeWithoutPromotionAuthority(t *
 	}, proposalBody)
 	requireStatus(t, res, body, http.StatusOK)
 	var receipt struct {
+		Change struct {
+			ID string `json:"id"`
+		} `json:"change"`
 		Version struct {
 			Producer string `json:"producer"`
 		} `json:"version"`
@@ -41,12 +44,23 @@ func TestRepositoryPrincipalCanReadIntentAndProposeWithoutPromotionAuthority(t *
 	}
 
 	readToken := createRepoTokenFixture(t, world.server.handler, world.server.repo.ID, "read", "reader")
+	res, body = request(t, world.server.handler, http.MethodGet, "/v1/repos/"+world.server.repo.ID+"/changes/"+receipt.Change.ID, repoBasicAuthorization(readToken.Token), "", "")
+	requireStatus(t, res, body, http.StatusOK)
+	res, body = request(t, world.server.handler, http.MethodGet, "/v1/repos/"+world.server.repo.ID+"/changes/"+receipt.Change.ID+"/versions", repoBasicAuthorization(readToken.Token), "", "")
+	requireStatus(t, res, body, http.StatusOK)
+
 	res, body = requestWithHeaders(t, world.server.handler, http.MethodPost, "/v1/repos/"+world.server.repo.ID+"/proposals", map[string]string{
 		"Authorization":   repoBasicAuthorization(readToken.Token),
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "read-only-proposal",
 	}, proposalBody)
 	requireStatus(t, res, body, http.StatusForbidden)
+	res, body = requestWithHeaders(t, world.server.handler, http.MethodPost, "/v1/repos/"+world.server.repo.ID+"/changes/"+receipt.Change.ID+"/versions", map[string]string{
+		"Authorization":   repoBasicAuthorization(ion.token),
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "repository-authored-amendment",
+	}, `{}`)
+	requireStatus(t, res, body, http.StatusMethodNotAllowed)
 }
 
 func repoBasicAuthorization(token string) string {

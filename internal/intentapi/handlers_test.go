@@ -29,7 +29,7 @@ func TestNativeIntentAPIAdmitsAndImmediatelyPromotesAProposal(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "request-1")
 	recorder := httptest.NewRecorder()
 
-	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
@@ -93,7 +93,7 @@ func TestNativeIntentAPIAdmitsAndImmediatelyPromotesAProposal(t *testing.T) {
 	retry.Header.Set("Content-Type", "application/json")
 	retry.Header.Set("Idempotency-Key", "request-1")
 	retryRecorder := httptest.NewRecorder()
-	handlers.Propose.ServeHTTP(retryRecorder, intentapi.WithAuthenticatedProducer(retry, "control-api"))
+	handlers.AdmitProposal.ServeHTTP(retryRecorder, intentapi.WithAuthenticatedProducer(retry, "control-api"))
 	if retryRecorder.Code != http.StatusOK {
 		t.Fatalf("retry status = %d, want 200: %s", retryRecorder.Code, retryRecorder.Body.String())
 	}
@@ -137,7 +137,7 @@ func TestNativeIntentAPIKeepsAdmissionSuccessSeparateFromPromotion(t *testing.T)
 	request.Header.Set("Idempotency-Key", "stale-proposal")
 	recorder := httptest.NewRecorder()
 
-	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
@@ -155,20 +155,20 @@ func TestNativeIntentAPIKeepsAdmissionSuccessSeparateFromPromotion(t *testing.T)
 	}
 }
 
-func TestNativeIntentAPIReturnsDurableAdmissionWhenTriageFails(t *testing.T) {
+func TestNativeIntentAPIReturnsDurableAdmissionWhenPromotionDecisionFails(t *testing.T) {
 	repository, _ := newRepository(t)
 	baseIntent := repository.CurrentIntent()
-	handlers := intentapi.NewHandlers(intentservice.NewWithTriage(staticResolver{repository: repository}, failingTriage{}))
+	handlers := intentapi.NewHandlers(intentservice.NewWithPromotionDecider(staticResolver{repository: repository}, failingDecider{}))
 	request := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/proposals", bytes.NewBufferString(`{
 		"baseIntent":"`+string(baseIntent.ID)+`",
 		"contentRef":{"engine":"git","revision":"bbbbbbbb"}
 	}`))
 	request.SetPathValue("repoID", "repo_123")
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Idempotency-Key", "triage-failure")
+	request.Header.Set("Idempotency-Key", "decision-failure")
 	recorder := httptest.NewRecorder()
 
-	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "ion"))
+	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "ion"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want admitted 200: %s", recorder.Code, recorder.Body.String())
@@ -215,7 +215,7 @@ func TestNativeIntentAPIAdmitsAnExplicitVersionDependency(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "dependent")
 	recorder := httptest.NewRecorder()
 
-	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "ion"))
+	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "ion"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
@@ -345,7 +345,7 @@ func TestNativeIntentAPIRejectsSpoofedProducerAndUnsafeRetries(t *testing.T) {
 				request.Header.Set("Idempotency-Key", test.header)
 			}
 			recorder := httptest.NewRecorder()
-			handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+			handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 			if recorder.Code != test.status {
 				t.Fatalf("status = %d, want %d: %s", recorder.Code, test.status, recorder.Body.String())
 			}
@@ -358,7 +358,7 @@ func TestNativeIntentAPIRejectsSpoofedProducerAndUnsafeRetries(t *testing.T) {
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", "same-key")
 		recorder := httptest.NewRecorder()
-		handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+		handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 		return recorder
 	}
 	if first := propose("bbbbbbbb"); first.Code != http.StatusOK {
@@ -385,7 +385,7 @@ func TestNativeIntentAPIReturnsUnprocessableForContentTheEngineCannotAdmit(t *te
 	request.Header.Set("Idempotency-Key", "wrong-engine")
 	recorder := httptest.NewRecorder()
 
-	handlers.Propose.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
 
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422: %s", recorder.Code, recorder.Body.String())
@@ -429,10 +429,10 @@ type rejectingAdmission struct {
 	err error
 }
 
-type failingTriage struct{}
+type failingDecider struct{}
 
-func (failingTriage) DecideNext(context.Context, intent.Proposed) (intentservice.NextAction, error) {
-	return "", errors.New("triage unavailable")
+func (failingDecider) DecidePromotion(context.Context, intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
+	return "", errors.New("promotion decision unavailable")
 }
 
 func (admission rejectingAdmission) Admit(context.Context, intent.VersionID, intent.ContentRef) error {

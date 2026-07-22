@@ -58,7 +58,7 @@ func TestServiceCanHoldAnAdmittedProposal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
-	service := intentservice.NewWithTriage(staticResolver{repository: repository}, holdingTriage{})
+	service := intentservice.NewWithPromotionDecider(staticResolver{repository: repository}, deferPromotionDecider{})
 	initial := repository.CurrentIntent()
 
 	admission, err := service.Propose(context.Background(), "repo_123", intentservice.Proposal{
@@ -84,6 +84,45 @@ func TestServiceCanHoldAnAdmittedProposal(t *testing.T) {
 	}
 }
 
+func TestServiceAmendmentUsesOrdinaryJudgementAndPromotion(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, acceptingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	original, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-b",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose original: %v", err)
+	}
+	service := intentservice.New(staticResolver{repository: repository})
+	receipt, err := service.Amend(ctx, "repo_123", intentservice.AmendmentRequest{
+		IdempotencyKey:  "amend-b",
+		ChangeID:        original.Change.ID,
+		ExpectedVersion: original.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "b2b2b2b2"},
+		Producer:        "repository",
+		Rationale:       "timeout path could duplicate the operation",
+	})
+	if err != nil {
+		t.Fatalf("amend: %v", err)
+	}
+	if receipt.Amended.Version.ChangeID != original.Change.ID || receipt.Amended.Amendment.FromVersion != original.Version.ID {
+		t.Fatalf("amendment receipt = %#v, want next version of original change", receipt)
+	}
+	if receipt.Promotion == nil || receipt.Promotion.Promotion.VersionID != receipt.Amended.Version.ID {
+		t.Fatalf("amendment promotion = %#v, want amended version %q", receipt.Promotion, receipt.Amended.Version.ID)
+	}
+	if got := repository.CurrentIntent().Content; got != receipt.Amended.Version.Content {
+		t.Fatalf("current content = %#v, want amended content %#v", got, receipt.Amended.Version.Content)
+	}
+}
+
 func TestPromotingAHeldVersionReconsidersItsAdmittedDependent(t *testing.T) {
 	ctx := context.Background()
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
@@ -92,14 +131,14 @@ func TestPromotingAHeldVersionReconsidersItsAdmittedDependent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
-	triage := &holdParentOnceTriage{parentRevision: "bbbbbbbb"}
-	service := intentservice.NewWithTriage(staticResolver{repository: repository}, triage)
+	decider := &deferParentOnceDecider{parentRevision: "bbbbbbbb"}
+	service := intentservice.NewWithPromotionDecider(staticResolver{repository: repository}, decider)
 	initial := repository.CurrentIntent()
 
 	parentProposal := intentservice.Proposal{
 		IdempotencyKey: "request-parent",
 		BaseIntent:     initial.ID,
-		Content:        intent.ContentRef{Engine: "git", Revision: triage.parentRevision},
+		Content:        intent.ContentRef{Engine: "git", Revision: decider.parentRevision},
 		Producer:       "ion",
 	}
 	parent, err := service.Propose(ctx, "repo_123", parentProposal)
@@ -135,11 +174,71 @@ func TestPromotingAHeldVersionReconsidersItsAdmittedDependent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect dependent: %v", err)
 	}
-	if inspection.Promotion == nil {
+	if inspection.LatestPromotion == nil {
 		t.Fatal("dependent was not reconsidered after its dependency promoted")
 	}
 	if got := repository.CurrentIntent().Content; got != dependent.Proposed.Version.Content {
 		t.Fatalf("current content = %#v, want dependent content %#v", got, dependent.Proposed.Version.Content)
+	}
+}
+
+func TestPromotingADeferredParentReconsidersOnlyTheLatestDependentVersion(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, acceptingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	decider := &deferParentOnceDecider{parentRevision: "bbbbbbbb"}
+	service := intentservice.NewWithPromotionDecider(staticResolver{repository: repository}, decider)
+	initial := repository.CurrentIntent()
+	parentProposal := intentservice.Proposal{
+		IdempotencyKey: "request-parent",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: decider.parentRevision},
+		Producer:       "ion",
+	}
+	parent, err := service.Propose(ctx, "repo_123", parentProposal)
+	if err != nil {
+		t.Fatalf("propose deferred parent: %v", err)
+	}
+	dependent, err := service.Propose(ctx, "repo_123", intentservice.Proposal{
+		IdempotencyKey: "request-dependent",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
+		Dependencies:   []intent.VersionID{parent.Proposed.Version.ID},
+	})
+	if err != nil {
+		t.Fatalf("propose dependent: %v", err)
+	}
+	amended, err := service.Amend(ctx, "repo_123", intentservice.AmendmentRequest{
+		IdempotencyKey:  "amend-dependent",
+		ChangeID:        dependent.Proposed.Change.ID,
+		ExpectedVersion: dependent.Proposed.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "dddddddd"},
+		Producer:        "repository-agent",
+		Rationale:       "repair dependent",
+	})
+	if err != nil {
+		t.Fatalf("amend waiting dependent: %v", err)
+	}
+	if amended.Promotion != nil {
+		t.Fatalf("amended dependent promoted before parent: %#v", amended.Promotion)
+	}
+
+	if _, err := service.Propose(ctx, "repo_123", parentProposal); err != nil {
+		t.Fatalf("promote parent and reconsider latest dependent: %v", err)
+	}
+	inspection, err := repository.InspectChange(ctx, dependent.Proposed.Change.ID)
+	if err != nil {
+		t.Fatalf("inspect amended dependent: %v", err)
+	}
+	if inspection.LatestVersion.ID != amended.Amended.Version.ID || inspection.LatestPromotion == nil {
+		t.Fatalf("dependent inspection = %#v, want latest amended version promoted", inspection)
+	}
+	if got := repository.CurrentIntent().Content; got != amended.Amended.Version.Content {
+		t.Fatalf("current content = %#v, want amended dependent %#v", got, amended.Amended.Version.Content)
 	}
 }
 
@@ -156,14 +255,14 @@ func TestServiceRecoversAReadyDependentAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open repository: %v", err)
 	}
-	triageErr := errors.New("stop after parent promotion")
-	triage := &interruptDependentTriage{parentRevision: "bbbbbbbb", err: triageErr}
-	service := intentservice.NewWithTriage(staticResolver{repository: repository}, triage)
+	decisionErr := errors.New("stop after parent promotion")
+	decider := &interruptDependentDecider{parentRevision: "bbbbbbbb", err: decisionErr}
+	service := intentservice.NewWithPromotionDecider(staticResolver{repository: repository}, decider)
 	initial := repository.CurrentIntent()
 	parentProposal := intentservice.Proposal{
 		IdempotencyKey: "request-parent",
 		BaseIntent:     initial.ID,
-		Content:        intent.ContentRef{Engine: "git", Revision: triage.parentRevision},
+		Content:        intent.ContentRef{Engine: "git", Revision: decider.parentRevision},
 		Producer:       "ion",
 	}
 	parent, err := service.Propose(ctx, "repo_123", parentProposal)
@@ -180,8 +279,8 @@ func TestServiceRecoversAReadyDependentAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("propose dependent: %v", err)
 	}
-	if _, err := service.Propose(ctx, "repo_123", parentProposal); !errors.Is(err, triageErr) {
-		t.Fatalf("interrupted parent reconsideration error = %v, want %v", err, triageErr)
+	if _, err := service.Propose(ctx, "repo_123", parentProposal); !errors.Is(err, decisionErr) {
+		t.Fatalf("interrupted parent reconsideration error = %v, want %v", err, decisionErr)
 	}
 	if got := repository.CurrentIntent().Content; got != parent.Proposed.Version.Content {
 		t.Fatalf("content before restart = %#v, want promoted parent %#v", got, parent.Proposed.Version.Content)
@@ -211,90 +310,90 @@ func TestServiceRecoversAReadyDependentAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect recovered dependent: %v", err)
 	}
-	if inspection.Promotion == nil {
+	if inspection.LatestPromotion == nil {
 		t.Fatal("recovered dependent was not promoted")
 	}
 }
 
-func TestServiceReturnsTheAdmissionWhenTriageFails(t *testing.T) {
+func TestServiceReturnsTheAdmissionWhenPromotionDecisionFails(t *testing.T) {
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
 	repository, err := intent.NewRepository(initialContent, acceptingAdmission{}, &recordingProjection{current: initialContent})
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
-	triageErr := errors.New("triage unavailable")
-	service := intentservice.NewWithTriage(staticResolver{repository: repository}, failingTriage{err: triageErr})
+	decisionErr := errors.New("promotion decision unavailable")
+	service := intentservice.NewWithPromotionDecider(staticResolver{repository: repository}, failingDecider{err: decisionErr})
 	initial := repository.CurrentIntent()
 
 	admission, err := service.Propose(context.Background(), "repo_123", intentservice.Proposal{
-		IdempotencyKey: "request-triage-failure",
+		IdempotencyKey: "request-decision-failure",
 		BaseIntent:     initial.ID,
 		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
 		Producer:       "ion",
 	})
-	if !errors.Is(err, triageErr) {
-		t.Fatalf("propose error = %v, want triage failure", err)
+	if !errors.Is(err, decisionErr) {
+		t.Fatalf("propose error = %v, want promotion decision failure", err)
 	}
 	if admission.Proposed.Version.ID == "" {
-		t.Fatal("triage failure discarded the durable admission")
+		t.Fatal("promotion decision failure discarded the durable admission")
 	}
 	if admission.Promotion != nil {
-		t.Fatalf("triage failure promotion = %#v, want nil", admission.Promotion)
+		t.Fatalf("decision failure promotion = %#v, want nil", admission.Promotion)
 	}
 	if got := repository.CurrentIntent(); got != initial {
 		t.Fatalf("current intent = %#v, want unchanged %#v", got, initial)
 	}
 }
 
-type holdingTriage struct{}
+type deferPromotionDecider struct{}
 
-func (holdingTriage) DecideNext(context.Context, intent.Proposed) (intentservice.NextAction, error) {
-	return intentservice.Hold, nil
+func (deferPromotionDecider) DecidePromotion(context.Context, intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
+	return intentservice.DeferPromotion, nil
 }
 
-type holdParentOnceTriage struct {
+type deferParentOnceDecider struct {
 	parentRevision string
 	parentCalls    int
 }
 
-func (triage *holdParentOnceTriage) DecideNext(_ context.Context, proposed intent.Proposed) (intentservice.NextAction, error) {
-	if proposed.Version.Content.Revision == triage.parentRevision {
-		triage.parentCalls++
-		if triage.parentCalls == 1 {
-			return intentservice.Hold, nil
+func (decider *deferParentOnceDecider) DecidePromotion(_ context.Context, subject intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
+	if subject.Version.Content.Revision == decider.parentRevision {
+		decider.parentCalls++
+		if decider.parentCalls == 1 {
+			return intentservice.DeferPromotion, nil
 		}
 	}
-	return intentservice.Promote, nil
+	return intentservice.PromoteNow, nil
 }
 
-type interruptDependentTriage struct {
+type interruptDependentDecider struct {
 	parentRevision string
 	parentCalls    int
 	dependentCalls int
 	err            error
 }
 
-func (triage *interruptDependentTriage) DecideNext(_ context.Context, proposed intent.Proposed) (intentservice.NextAction, error) {
-	if proposed.Version.Content.Revision == triage.parentRevision {
-		triage.parentCalls++
-		if triage.parentCalls == 1 {
-			return intentservice.Hold, nil
+func (decider *interruptDependentDecider) DecidePromotion(_ context.Context, subject intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
+	if subject.Version.Content.Revision == decider.parentRevision {
+		decider.parentCalls++
+		if decider.parentCalls == 1 {
+			return intentservice.DeferPromotion, nil
 		}
-		return intentservice.Promote, nil
+		return intentservice.PromoteNow, nil
 	}
-	triage.dependentCalls++
-	if triage.dependentCalls > 1 {
-		return "", triage.err
+	decider.dependentCalls++
+	if decider.dependentCalls > 1 {
+		return "", decider.err
 	}
-	return intentservice.Promote, nil
+	return intentservice.PromoteNow, nil
 }
 
-type failingTriage struct {
+type failingDecider struct {
 	err error
 }
 
-func (triage failingTriage) DecideNext(context.Context, intent.Proposed) (intentservice.NextAction, error) {
-	return "", triage.err
+func (decider failingDecider) DecidePromotion(context.Context, intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
+	return "", decider.err
 }
 
 type staticResolver struct {

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sky-valley/gitrdone/internal/gitintent"
+	"github.com/sky-valley/gitrdone/internal/gitengine"
 )
 
 const maxGitBackendStderrBytes = 64 * 1024
@@ -73,7 +73,7 @@ func gitHTTPBackendEnv(r *http.Request, grant gitAccessGrant) []string {
 		"REMOTE_USER="+gitRemoteUser(grant),
 	)
 	if operation, ok := gitOperationFromRequest(r); ok && operation == gitOperationWrite {
-		hiddenRefs := []string{gitintent.ReservedRefNamespace}
+		hiddenRefs := []string{gitengine.ReservedRefNamespace}
 		if grant.CanonicalRef != "" {
 			hiddenRefs = append(hiddenRefs, grant.CanonicalRef)
 		}

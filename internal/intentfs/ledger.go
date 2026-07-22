@@ -203,10 +203,14 @@ func (ledger *Ledger) ProposalByIdempotencyKey(ctx context.Context, key string) 
 	if ledger.closed {
 		return intent.Proposed{}, false, errors.New("journal is closed")
 	}
-	versionID, found := ledger.state.idempotency[key]
+	record, found := ledger.state.idempotency[key]
 	if !found {
 		return intent.Proposed{}, false, nil
 	}
+	if record.operation != proposalOperation {
+		return intent.Proposed{}, false, intent.ErrIdempotencyConflict
+	}
+	versionID := record.versionID
 	version := cloneVersion(ledger.state.versions[versionID])
 	return intent.Proposed{
 		Change:  ledger.state.changes[version.ChangeID],

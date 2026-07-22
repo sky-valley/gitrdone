@@ -312,7 +312,7 @@ func TestRepositoryReadsAProposedChangeAndItsVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect change: %v", err)
 	}
-	if inspection.Change != proposed.Change || !reflect.DeepEqual(inspection.LatestVersion, proposed.Version) || inspection.Promotion != nil {
+	if inspection.Change != proposed.Change || !reflect.DeepEqual(inspection.LatestVersion, proposed.Version) || inspection.LatestPromotion != nil {
 		t.Fatalf("change inspection = %#v, want change and latest version without promotion", inspection)
 	}
 	promoted, err := repository.Promote(ctx, intent.PromoteRequest{
@@ -326,8 +326,8 @@ func TestRepositoryReadsAProposedChangeAndItsVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect promoted change: %v", err)
 	}
-	if inspection.Promotion == nil || *inspection.Promotion != promoted {
-		t.Fatalf("inspection promotion = %#v, want %#v", inspection.Promotion, promoted)
+	if inspection.LatestPromotion == nil || *inspection.LatestPromotion != promoted {
+		t.Fatalf("inspection promotion = %#v, want %#v", inspection.LatestPromotion, promoted)
 	}
 
 	_, found, err = repository.Change(ctx, "change_missing")

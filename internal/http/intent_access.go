@@ -7,7 +7,7 @@ import (
 	"github.com/sky-valley/gitrdone/internal/intentapi"
 )
 
-func intentAccessAuth(controlBearer string, access repoAccessAuthorizer, capability repoCapability, next http.Handler) http.Handler {
+func repositoryAccessAuth(controlBearer string, access repoAccessAuthorizer, capability repoCapability, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if matchesControlBearer(r, controlBearer) {
 			next.ServeHTTP(w, intentapi.WithAuthenticatedProducer(r, "control-api"))

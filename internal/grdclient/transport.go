@@ -43,15 +43,53 @@ type proposalResponse struct {
 	} `json:"promotion"`
 }
 
+type changeResponse struct {
+	ID            string `json:"id"`
+	LatestVersion struct {
+		ID         string `json:"id"`
+		ContentRef struct {
+			Engine   string `json:"engine"`
+			Revision string `json:"revision"`
+		} `json:"contentRef"`
+	} `json:"latestVersion"`
+	LatestAmendment *struct {
+		FromVersion string `json:"fromVersion"`
+		ToVersion   string `json:"toVersion"`
+		Rationale   string `json:"rationale"`
+	} `json:"latestAmendment"`
+	LatestPromotion *struct {
+		ToIntent string `json:"toIntent"`
+		Version  string `json:"version"`
+	} `json:"latestPromotion"`
+}
+
 func requireAncestor(ctx context.Context, workdir string, base string, head string) error {
+	ancestor, err := isAncestor(ctx, workdir, base, head)
+	if err != nil {
+		return err
+	}
+	if ancestor {
+		return nil
+	}
+	return errors.New("workspace is not based on current intent; sync before submitting")
+}
+
+func isAncestor(ctx context.Context, workdir string, base string, head string) (bool, error) {
 	command := exec.CommandContext(ctx, "git", "merge-base", "--is-ancestor", base, head)
 	command.Dir = workdir
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	err := command.Run()
 	if err == nil {
-		return nil
+		return true, nil
 	}
-	return errors.New("workspace is not based on current intent; sync before submitting")
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("check workspace ancestry: %w", err)
 }
 
 func discoverRemote(ctx context.Context, workdir string) (remote, error) {
@@ -123,6 +161,17 @@ func (client Client) currentIntent(ctx context.Context, remote remote) (intentRe
 		return intentResponse{}, errors.New("read current intent: response has no intent id")
 	}
 	return current, nil
+}
+
+func (client Client) change(ctx context.Context, remote remote, changeID string) (changeResponse, error) {
+	var change changeResponse
+	if err := client.getJSON(ctx, remote, "/v1/repos/"+remote.repoID+"/changes/"+changeID, &change); err != nil {
+		return changeResponse{}, fmt.Errorf("inspect submitted change: %w", err)
+	}
+	if change.ID == "" || change.LatestVersion.ID == "" {
+		return changeResponse{}, errors.New("inspect submitted change: response has no change version")
+	}
+	return change, nil
 }
 
 func (client Client) propose(ctx context.Context, remote remote, baseIntent string, revision string, dependencies []string, idempotencyKey string) (proposalResponse, error) {

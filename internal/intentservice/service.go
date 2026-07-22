@@ -15,6 +15,7 @@ var ErrRepositoryAlreadyInitialized = errors.New("repository intent is already i
 type Repository interface {
 	CurrentIntent() intent.Revision
 	Propose(ctx context.Context, proposal intent.Proposal) (intent.Proposed, error)
+	Amend(ctx context.Context, request intent.AmendRequest) (intent.Amended, error)
 	Promote(ctx context.Context, request intent.PromoteRequest) (intent.Promoted, error)
 	Promotion(ctx context.Context, versionID intent.VersionID) (intent.Promoted, bool, error)
 	ReadyDependents(ctx context.Context) ([]intent.Proposed, error)
@@ -22,21 +23,26 @@ type Repository interface {
 	Versions(ctx context.Context, query intent.VersionQuery) (intent.VersionPage, error)
 }
 
-type NextAction string
+type PromotionDecision string
 
 const (
-	Hold    NextAction = "hold"
-	Promote NextAction = "promote"
+	DeferPromotion PromotionDecision = "defer"
+	PromoteNow     PromotionDecision = "promote"
 )
 
-type Triage interface {
-	DecideNext(ctx context.Context, proposed intent.Proposed) (NextAction, error)
+type JudgementSubject struct {
+	Change  intent.Change
+	Version intent.Version
 }
 
-type promoteAllTriage struct{}
+type PromotionDecider interface {
+	DecidePromotion(ctx context.Context, subject JudgementSubject) (PromotionDecision, error)
+}
 
-func (promoteAllTriage) DecideNext(context.Context, intent.Proposed) (NextAction, error) {
-	return Promote, nil
+type promoteAllDecider struct{}
+
+func (promoteAllDecider) DecidePromotion(context.Context, JudgementSubject) (PromotionDecision, error) {
+	return PromoteNow, nil
 }
 
 type Repositories interface {
@@ -57,20 +63,34 @@ type Admission struct {
 	Promotion *intent.Promoted
 }
 
+type AmendmentRequest struct {
+	IdempotencyKey  string
+	ChangeID        intent.ChangeID
+	ExpectedVersion intent.VersionID
+	Content         intent.ContentRef
+	Producer        string
+	Rationale       string
+}
+
+type AmendmentReceipt struct {
+	Amended   intent.Amended
+	Promotion *intent.Promoted
+}
+
 type Service struct {
 	repositories Repositories
-	triage       Triage
+	decider      PromotionDecider
 }
 
 func New(repositories Repositories) *Service {
-	return NewWithTriage(repositories, promoteAllTriage{})
+	return NewWithPromotionDecider(repositories, promoteAllDecider{})
 }
 
-func NewWithTriage(repositories Repositories, triage Triage) *Service {
-	if triage == nil {
-		triage = promoteAllTriage{}
+func NewWithPromotionDecider(repositories Repositories, decider PromotionDecider) *Service {
+	if decider == nil {
+		decider = promoteAllDecider{}
 	}
-	return &Service{repositories: repositories, triage: triage}
+	return &Service{repositories: repositories, decider: decider}
 }
 
 func (service *Service) CurrentIntent(ctx context.Context, repoID string) (intent.Revision, error) {
@@ -105,7 +125,7 @@ func (service *Service) Propose(ctx context.Context, repoID string, proposal Pro
 		return Admission{}, err
 	}
 	admission := Admission{Proposed: proposed}
-	promoted, err := service.triageAndPromote(ctx, repository, proposed)
+	promoted, err := service.decideAndPromote(ctx, repository, JudgementSubject{Change: proposed.Change, Version: proposed.Version})
 	if err != nil {
 		return admission, err
 	}
@@ -116,6 +136,44 @@ func (service *Service) Propose(ctx context.Context, repoID string, proposal Pro
 		}
 	}
 	return admission, nil
+}
+
+func (service *Service) Amend(ctx context.Context, repoID string, amendment AmendmentRequest) (AmendmentReceipt, error) {
+	producer := strings.TrimSpace(amendment.Producer)
+	rationale := strings.TrimSpace(amendment.Rationale)
+	if producer == "" || rationale == "" {
+		return AmendmentReceipt{}, errors.New("amendment producer and rationale are required")
+	}
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return AmendmentReceipt{}, err
+	}
+	amended, err := repository.Amend(ctx, intent.AmendRequest{
+		IdempotencyKey:  amendment.IdempotencyKey,
+		ChangeID:        amendment.ChangeID,
+		ExpectedVersion: amendment.ExpectedVersion,
+		Content:         amendment.Content,
+		Producer:        producer,
+		Rationale:       rationale,
+	})
+	if err != nil {
+		return AmendmentReceipt{}, err
+	}
+	receipt := AmendmentReceipt{Amended: amended}
+	promoted, err := service.decideAndPromote(ctx, repository, JudgementSubject{
+		Change:  amended.Change,
+		Version: amended.Version,
+	})
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Promotion = promoted
+	if promoted != nil {
+		if err := service.reconsiderReady(ctx, repository); err != nil {
+			return receipt, fmt.Errorf("reconsider dependents after amendment promotion: %w", err)
+		}
+	}
+	return receipt, nil
 }
 
 func (service *Service) InspectChange(ctx context.Context, repoID string, changeID intent.ChangeID) (intent.ChangeInspection, error) {
@@ -153,7 +211,7 @@ func (service *Service) reconsiderReady(ctx context.Context, repository Reposito
 		}
 		advanced := false
 		for _, proposed := range ready {
-			promoted, err := service.triageAndPromote(ctx, repository, proposed)
+			promoted, err := service.decideAndPromote(ctx, repository, JudgementSubject{Change: proposed.Change, Version: proposed.Version})
 			if err != nil {
 				return err
 			}
@@ -168,26 +226,26 @@ func (service *Service) reconsiderReady(ctx context.Context, repository Reposito
 	}
 }
 
-func (service *Service) triageAndPromote(ctx context.Context, repository Repository, proposed intent.Proposed) (*intent.Promoted, error) {
-	promoted, found, err := repository.Promotion(ctx, proposed.Version.ID)
+func (service *Service) decideAndPromote(ctx context.Context, repository Repository, subject JudgementSubject) (*intent.Promoted, error) {
+	promoted, found, err := repository.Promotion(ctx, subject.Version.ID)
 	if err != nil {
 		return nil, err
 	}
 	if found {
 		return &promoted, nil
 	}
-	action, err := service.triage.DecideNext(ctx, proposed)
+	decision, err := service.decider.DecidePromotion(ctx, subject)
 	if err != nil {
-		return nil, fmt.Errorf("choose next judgement action: %w", err)
+		return nil, fmt.Errorf("decide immediate promotion: %w", err)
 	}
-	if action == Hold {
+	if decision == DeferPromotion {
 		return nil, nil
 	}
-	if action != Promote {
-		return nil, fmt.Errorf("unsupported next judgement action %q", action)
+	if decision != PromoteNow {
+		return nil, fmt.Errorf("unsupported promotion decision %q", decision)
 	}
 	promoted, err = repository.Promote(ctx, intent.PromoteRequest{
-		VersionID:      proposed.Version.ID,
+		VersionID:      subject.Version.ID,
 		ExpectedIntent: repository.CurrentIntent().ID,
 	})
 	switch {

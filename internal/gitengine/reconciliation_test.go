@@ -1,4 +1,4 @@
-package gitintent_test
+package gitengine_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sky-valley/gitrdone/internal/gitintent"
+	"github.com/sky-valley/gitrdone/internal/gitengine"
 	"github.com/sky-valley/gitrdone/internal/intent"
 	"github.com/sky-valley/gitrdone/internal/intentfs"
 )
@@ -19,7 +19,7 @@ func TestRepositoryRestartCompletesPromotionAlreadyProjectedByGit(t *testing.T) 
 	if err != nil {
 		t.Fatalf("open ledger: %v", err)
 	}
-	gitRepository, err := gitintent.OpenRepository(ctx, fixture.gitDir, "refs/heads/main")
+	gitRepository, err := gitengine.OpenAdapter(ctx, fixture.gitDir, "refs/heads/main")
 	if err != nil {
 		t.Fatalf("open git repository: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestRepositoryRestartCompletesPromotionAlreadyProjectedByGit(t *testing.T) 
 		t.Fatalf("reopen ledger: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	restartedGit, err := gitintent.OpenRepository(ctx, fixture.gitDir, "refs/heads/main")
+	restartedGit, err := gitengine.OpenAdapter(ctx, fixture.gitDir, "refs/heads/main")
 	if err != nil {
 		t.Fatalf("reopen git repository: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRepositoryRestartRetriesPromotionNotYetProjectedByGit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open ledger: %v", err)
 	}
-	gitRepository, err := gitintent.OpenRepository(ctx, fixture.gitDir, "refs/heads/main")
+	gitRepository, err := gitengine.OpenAdapter(ctx, fixture.gitDir, "refs/heads/main")
 	if err != nil {
 		t.Fatalf("open git repository: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestRepositoryRestartRetriesPromotionNotYetProjectedByGit(t *testing.T) {
 		t.Fatalf("reopen ledger: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	restartedGit, err := gitintent.OpenRepository(ctx, fixture.gitDir, "refs/heads/main")
+	restartedGit, err := gitengine.OpenAdapter(ctx, fixture.gitDir, "refs/heads/main")
 	if err != nil {
 		t.Fatalf("reopen git repository: %v", err)
 	}

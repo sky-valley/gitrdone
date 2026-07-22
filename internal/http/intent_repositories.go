@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/sky-valley/gitrdone/internal/gitintent"
+	"github.com/sky-valley/gitrdone/internal/gitengine"
 	"github.com/sky-valley/gitrdone/internal/intent"
 	"github.com/sky-valley/gitrdone/internal/intentfs"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
@@ -93,15 +93,15 @@ func (registry *intentRepositoryRegistry) Bootstrap(ctx context.Context, control
 	if err != nil {
 		return intent.Revision{}, fmt.Errorf("locate bare repo: %w", err)
 	}
-	gitRepository, err := gitintent.OpenRepository(ctx, gitDir, "refs/heads/"+repo.DefaultBranch)
+	gitAdapter, err := gitengine.OpenAdapter(ctx, gitDir, "refs/heads/"+repo.DefaultBranch)
 	if err != nil {
-		return intent.Revision{}, fmt.Errorf("open git intent repository: %w", err)
+		return intent.Revision{}, fmt.Errorf("open git engine adapter: %w", err)
 	}
-	if err := gitRepository.Bootstrap(ctx, content); err != nil {
-		if errors.Is(err, gitintent.ErrTrunkAlreadyInitialized) {
+	if err := gitAdapter.Bootstrap(ctx, content); err != nil {
+		if errors.Is(err, gitengine.ErrTrunkAlreadyInitialized) {
 			return intent.Revision{}, intentservice.ErrRepositoryAlreadyInitialized
 		}
-		return intent.Revision{}, fmt.Errorf("bootstrap git intent repository: %w", err)
+		return intent.Revision{}, fmt.Errorf("bootstrap git engine adapter: %w", err)
 	}
 	repository, err := registry.openLocked(ctx, repo)
 	if err != nil {
@@ -115,11 +115,11 @@ func (registry *intentRepositoryRegistry) openLocked(ctx context.Context, repo r
 	if err != nil {
 		return nil, fmt.Errorf("locate bare repo: %w", err)
 	}
-	gitRepository, err := gitintent.OpenRepository(ctx, gitDir, "refs/heads/"+repo.DefaultBranch)
+	gitAdapter, err := gitengine.OpenAdapter(ctx, gitDir, "refs/heads/"+repo.DefaultBranch)
 	if err != nil {
-		return nil, fmt.Errorf("open git intent repository: %w", err)
+		return nil, fmt.Errorf("open git engine adapter: %w", err)
 	}
-	initial, err := gitRepository.Current(ctx)
+	initial, err := gitAdapter.Current(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read initial trunk projection: %w", err)
 	}
@@ -132,7 +132,7 @@ func (registry *intentRepositoryRegistry) openLocked(ctx context.Context, repo r
 	if err != nil {
 		return nil, fmt.Errorf("open intent ledger: %w", err)
 	}
-	repository, err := intent.OpenRepository(ctx, initial, ledger, gitRepository, gitRepository)
+	repository, err := intent.OpenRepository(ctx, initial, ledger, gitAdapter, gitAdapter)
 	if err != nil {
 		_ = ledger.Close()
 		return nil, fmt.Errorf("open intent repository: %w", err)

@@ -1,4 +1,4 @@
-package gitintent
+package gitengine
 
 import (
 	"context"
@@ -14,18 +14,21 @@ import (
 
 const maxGitErrorBytes = 4 * 1024
 const ReservedRefNamespace = "refs/gitrdone/"
-const holdingNamespace = ReservedRefNamespace + "holding"
+
+// admittedRefNamespace retains the original on-disk ref path for compatibility.
+// These refs prove content admission; they do not encode a judgement outcome.
+const admittedRefNamespace = ReservedRefNamespace + "holding"
 
 var fullObjectID = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 var ErrTrunkAlreadyInitialized = errors.New("trunk is already initialized")
 
-type Repository struct {
+type Adapter struct {
 	gitDir   string
 	trunkRef string
 }
 
-func OpenRepository(ctx context.Context, gitDir, trunkRef string) (*Repository, error) {
+func OpenAdapter(ctx context.Context, gitDir, trunkRef string) (*Adapter, error) {
 	gitDir = strings.TrimSpace(gitDir)
 	if gitDir == "" {
 		return nil, errors.New("git directory is required")
@@ -34,7 +37,7 @@ func OpenRepository(ctx context.Context, gitDir, trunkRef string) (*Repository, 
 	if !strings.HasPrefix(trunkRef, "refs/heads/") {
 		return nil, errors.New("trunk ref must be under refs/heads")
 	}
-	repository := &Repository{gitDir: gitDir, trunkRef: trunkRef}
+	repository := &Adapter{gitDir: gitDir, trunkRef: trunkRef}
 	if err := repository.run(ctx, "check-ref-format", trunkRef); err != nil {
 		return nil, fmt.Errorf("validate trunk ref: %w", err)
 	}
@@ -44,45 +47,45 @@ func OpenRepository(ctx context.Context, gitDir, trunkRef string) (*Repository, 
 		"--local",
 		"--replace-all",
 		"transfer.hideRefs",
-		holdingNamespace,
-		"^"+regexp.QuoteMeta(holdingNamespace)+"$",
+		admittedRefNamespace,
+		"^"+regexp.QuoteMeta(admittedRefNamespace)+"$",
 	); err != nil {
-		return nil, fmt.Errorf("hide holding refs: %w", err)
+		return nil, fmt.Errorf("hide admitted-content refs: %w", err)
 	}
 	return repository, nil
 }
 
-func (repository *Repository) Admit(ctx context.Context, versionID intent.VersionID, content intent.ContentRef) error {
+func (repository *Adapter) Admit(ctx context.Context, versionID intent.VersionID, content intent.ContentRef) error {
 	oid, err := repository.admissibleCommit(ctx, content)
 	if err != nil {
 		return err
 	}
 
-	holdingRef := holdingNamespace + "/" + string(versionID)
-	if err := repository.run(ctx, "check-ref-format", holdingRef); err != nil {
-		return fmt.Errorf("validate holding ref: %w", err)
+	admittedRef := admittedRefNamespace + "/" + string(versionID)
+	if err := repository.run(ctx, "check-ref-format", admittedRef); err != nil {
+		return fmt.Errorf("validate admitted-content ref: %w", err)
 	}
-	current, found, err := repository.readRef(ctx, holdingRef)
+	current, found, err := repository.readRef(ctx, admittedRef)
 	if err != nil {
-		return fmt.Errorf("read holding ref: %w", err)
+		return fmt.Errorf("read admitted-content ref: %w", err)
 	}
 	if found {
 		if current == oid {
 			return nil
 		}
-		return errors.New("holding ref already contains different content")
+		return errors.New("admitted-content ref already contains different content")
 	}
-	if err := repository.run(ctx, "update-ref", holdingRef, oid, ""); err != nil {
-		current, found, readErr := repository.readRef(ctx, holdingRef)
+	if err := repository.run(ctx, "update-ref", admittedRef, oid, ""); err != nil {
+		current, found, readErr := repository.readRef(ctx, admittedRef)
 		if readErr == nil && found && current == oid {
 			return nil
 		}
-		return fmt.Errorf("create holding ref: %w", err)
+		return fmt.Errorf("create admitted-content ref: %w", err)
 	}
 	return nil
 }
 
-func (repository *Repository) Bootstrap(ctx context.Context, content intent.ContentRef) error {
+func (repository *Adapter) Bootstrap(ctx context.Context, content intent.ContentRef) error {
 	oid, err := gitObjectID(content)
 	if err != nil {
 		return fmt.Errorf("%w: %v", intent.ErrContentNotAdmissible, err)
@@ -113,7 +116,7 @@ func (repository *Repository) Bootstrap(ctx context.Context, content intent.Cont
 	return nil
 }
 
-func (repository *Repository) admissibleCommit(ctx context.Context, content intent.ContentRef) (string, error) {
+func (repository *Adapter) admissibleCommit(ctx context.Context, content intent.ContentRef) (string, error) {
 	oid, err := gitObjectID(content)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", intent.ErrContentNotAdmissible, err)
@@ -124,7 +127,7 @@ func (repository *Repository) admissibleCommit(ctx context.Context, content inte
 	return oid, nil
 }
 
-func (repository *Repository) validateCommit(ctx context.Context, oid string) error {
+func (repository *Adapter) validateCommit(ctx context.Context, oid string) error {
 	if err := repository.run(ctx, "cat-file", "-e", oid+"^{commit}"); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -135,7 +138,7 @@ func (repository *Repository) validateCommit(ctx context.Context, oid string) er
 	return nil
 }
 
-func (repository *Repository) Current(ctx context.Context) (intent.ContentRef, error) {
+func (repository *Adapter) Current(ctx context.Context) (intent.ContentRef, error) {
 	current, found, err := repository.readRef(ctx, repository.trunkRef)
 	if err != nil {
 		return intent.ContentRef{}, fmt.Errorf("read trunk ref: %w", err)
@@ -146,7 +149,7 @@ func (repository *Repository) Current(ctx context.Context) (intent.ContentRef, e
 	return intent.ContentRef{Engine: "git", Revision: current}, nil
 }
 
-func (repository *Repository) Advance(ctx context.Context, expected, next intent.ContentRef) error {
+func (repository *Adapter) Advance(ctx context.Context, expected, next intent.ContentRef) error {
 	expectedOID, err := gitObjectID(expected)
 	if err != nil {
 		return fmt.Errorf("expected trunk content: %w", err)
@@ -186,7 +189,7 @@ func gitObjectID(content intent.ContentRef) (string, error) {
 	return content.Revision, nil
 }
 
-func (repository *Repository) readRef(ctx context.Context, ref string) (string, bool, error) {
+func (repository *Adapter) readRef(ctx context.Context, ref string) (string, bool, error) {
 	output, err := repository.output(ctx, "rev-parse", "--verify", "--quiet", ref)
 	if err == nil {
 		return strings.TrimSpace(output), true, nil
@@ -198,12 +201,12 @@ func (repository *Repository) readRef(ctx context.Context, ref string) (string, 
 	return "", false, err
 }
 
-func (repository *Repository) run(ctx context.Context, args ...string) error {
+func (repository *Adapter) run(ctx context.Context, args ...string) error {
 	_, err := repository.output(ctx, args...)
 	return err
 }
 
-func (repository *Repository) output(ctx context.Context, args ...string) (string, error) {
+func (repository *Adapter) output(ctx context.Context, args ...string) (string, error) {
 	gitArgs := append([]string{"--git-dir", repository.gitDir}, args...)
 	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.Env = gitProcessEnv()

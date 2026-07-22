@@ -103,7 +103,7 @@ func TestPostgresRepoStoreContract(t *testing.T) {
 	intentGrant, err := store.AuthorizeRepoAccess(ctx, authorizeRepoAccessInput{
 		RepoID:     repo.ID,
 		Token:      token.Token,
-		Capability: repoCapabilityReadIntent,
+		Capability: repoCapabilityInspect,
 	})
 	if err != nil {
 		t.Fatal(err)

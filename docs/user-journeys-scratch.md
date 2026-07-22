@@ -170,16 +170,14 @@ Candidate thin-client transcript:
 $ grd submit -m "refactor authentication"
 
 Submitted: refactor authentication
-Status: held — simulator running
-You can keep working.
-
-Started a new working change on top of it.
+Admitted; judgement pending
+Continue working on top of it.
 
 $ grd status
 
 Working change: add passkey support
 Depends on:
-  refactor authentication — held
+  refactor authentication — judgement pending
 
 $ grd submit -m "add passkey support"
 
@@ -188,7 +186,7 @@ Status: waiting on "refactor authentication"
 Independent inspection can continue meanwhile.
 ```
 
-Settled UX rule: submitting freezes the current change version and starts a new working change on top of it. Revising the submitted change is explicit rather than inferred from later edits.
+Settled UX rule: submitting freezes the current change version and lets the user continue on top of it. The Git adapter does not manufacture an empty successor commit; the next commit becomes successor work. Revising the submitted change is explicit rather than inferred from later edits.
 
 Continuing a workstream and starting a new one deliberately have different bases:
 
@@ -212,7 +210,7 @@ User sees what changed, why, and what happened to ongoing work
 
 | ID | Deviation | Expected user contract | Disposition |
 |---|---|---|---|
-| J3.0 | C can be replayed cleanly onto B′ | Reconcile automatically, preserve an undo path, and explain the amendment and descendant rewrite | First proof for Journey 3 |
+| J3.0 | C can be replayed cleanly onto B′ | Reconcile automatically, preserve an undo path, and explain the amendment and descendant rewrite | Executable first proof |
 | J3.1 | The user has no descendants of B | Update the workspace's accepted-state knowledge and show the amendment; no unnecessary local rewrite | Native target |
 | J3.2 | C conflicts mechanically with B′ | Preserve B, B′, and C; surface the conflict as durable work requiring judgement rather than destroying the workspace | Native target |
 | J3.3 | B′ is still being judged rather than promoted | Show that the proposal has a new repository-produced version without misrepresenting it as accepted intent | Native target |
@@ -236,6 +234,8 @@ Your dependent work was rebased successfully.
 ```
 
 Journey 3 is expected to expose the clearest capability gradient: a jj-aware client may represent change evolution directly; a thin `grd` client over Git may need guarded rewrites and recovery refs; plain Git may only support a reduced, more manual reconciliation experience.
+
+The first executable Git-adapter proof keeps B and B′ as immutable versions of one change, records the repository rationale, promotes B′ through the ordinary judgement path, and lets `grd sync` replay a clean local C onto B′. Before rewriting, the client creates `refs/grd/recovery/<original-head>`. This proves J3.0 only: an already admitted dependent C fails amendment closed until J2.3 exists; durable conflict materialization, no-descendant reconciliation, multiple unseen amendments, and retry after interruption remain the later J3 deviations above.
 
 ## Working order
 

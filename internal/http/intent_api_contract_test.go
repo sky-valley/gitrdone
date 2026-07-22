@@ -99,15 +99,15 @@ func TestNativeIntentAPIUsesRealGitProjection(t *testing.T) {
 		LatestVersion struct {
 			ID string `json:"id"`
 		} `json:"latestVersion"`
-		Promotion *struct {
+		LatestPromotion *struct {
 			ID string `json:"id"`
-		} `json:"promotion"`
+		} `json:"latestPromotion"`
 	}
 	decodeJSON(t, res, body, &change)
 	if change.ID != receipt.Change.ID {
 		t.Fatalf("change id = %q, want %q", change.ID, receipt.Change.ID)
 	}
-	if change.LatestVersion.ID != receipt.Version.ID || change.Promotion == nil || change.Promotion.ID != receipt.Promotion.ID {
+	if change.LatestVersion.ID != receipt.Version.ID || change.LatestPromotion == nil || change.LatestPromotion.ID != receipt.Promotion.ID {
 		t.Fatalf("change summary = %#v, want latest version and promotion from receipt", change)
 	}
 

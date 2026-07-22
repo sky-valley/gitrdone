@@ -15,7 +15,7 @@ var ErrIntentNotFound = errors.New("intent not found")
 var ErrChangeNotFound = errors.New("change not found")
 var ErrVersionNotFound = errors.New("change version not found")
 var ErrContentNotAdmissible = errors.New("content cannot be admitted by the repository engine")
-var ErrIdempotencyConflict = errors.New("idempotency key already used for a different proposal")
+var ErrIdempotencyConflict = errors.New("idempotency key already used for a different operation")
 var ErrPromotionPending = errors.New("another promotion is pending reconciliation")
 var ErrDependenciesPending = errors.New("change dependencies are not promoted")
 
@@ -93,9 +93,10 @@ type VersionPage struct {
 }
 
 type ChangeInspection struct {
-	Change        Change
-	LatestVersion Version
-	Promotion     *Promoted
+	Change          Change
+	LatestVersion   Version
+	LatestAmendment *Amendment
+	LatestPromotion *Promoted
 }
 
 type PreparedPromotion struct {
@@ -113,7 +114,7 @@ type TrunkProjection interface {
 }
 
 type Repository struct {
-	proposalMu  sync.Mutex
+	changeMu    sync.Mutex
 	promotionMu sync.Mutex
 	stateMu     sync.RWMutex
 	current     Revision
@@ -121,6 +122,7 @@ type Repository struct {
 	projection  TrunkProjection
 	intents     IntentStore
 	changes     ChangeStore
+	amendments  AmendmentStore
 	promotions  PromotionJournal
 	conflict    *ReconciliationConflict
 }
@@ -167,6 +169,7 @@ func OpenRepository(ctx context.Context, initial ContentRef, ledger Ledger, admi
 		projection: projection,
 		intents:    ledger,
 		changes:    ledger,
+		amendments: ledger,
 		promotions: ledger,
 	}
 	if err := repository.Reconcile(ctx); err != nil {
@@ -213,12 +216,19 @@ func (repository *Repository) InspectChange(ctx context.Context, id ChangeID) (C
 		return ChangeInspection{}, errors.New("change has no versions")
 	}
 	inspection := ChangeInspection{Change: change, LatestVersion: latest}
+	amendment, found, err := repository.amendments.Amendment(ctx, latest.ID)
+	if err != nil {
+		return ChangeInspection{}, fmt.Errorf("read latest version amendment: %w", err)
+	}
+	if found {
+		inspection.LatestAmendment = &amendment
+	}
 	promoted, found, err := repository.promotions.CompletedPromotion(ctx, latest.ID)
 	if err != nil {
 		return ChangeInspection{}, fmt.Errorf("read latest version promotion: %w", err)
 	}
 	if found {
-		inspection.Promotion = &promoted
+		inspection.LatestPromotion = &promoted
 	}
 	return inspection, nil
 }
@@ -265,8 +275,8 @@ func (repository *Repository) Propose(ctx context.Context, proposal Proposal) (P
 		return Proposed{}, errors.New("proposal producer is required")
 	}
 
-	repository.proposalMu.Lock()
-	defer repository.proposalMu.Unlock()
+	repository.changeMu.Lock()
+	defer repository.changeMu.Unlock()
 
 	existing, found, err := repository.changes.ProposalByIdempotencyKey(ctx, proposal.IdempotencyKey)
 	if err != nil {

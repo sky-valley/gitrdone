@@ -41,6 +41,11 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 		requireBodyIncludes(t, body, "List and revoke repo tokens with the control bearer token; token values are returned only at creation.")
 		requireBodyIncludes(t, body, "POST /v1/repos/{repoID}/proposals")
 		requireBodyIncludes(t, body, "A successful proposal response means the change version was durably admitted")
+		requireBodyIncludes(t, body, "## Administrative API Surface")
+		requireBodyIncludes(t, body, "## Native Repository API Surface")
+		requireBodyIncludes(t, body, "## Git Adapter API Surface")
+		requireBodyIncludes(t, body, "Admit proposal")
+		requireBodyIncludes(t, body, "List change versions")
 	})
 
 	t.Run("well-known llms txt aliases root llms txt", func(t *testing.T) {
@@ -71,6 +76,10 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 				requireBodyIncludes(t, body, "POST /v1/repos/{repoID}/proposals")
 				requireBodyIncludes(t, body, "GET /v1/repos/{repoID}/changes/{changeID}")
 				requireBodyIncludes(t, body, "GET /v1/repos/{repoID}/changes/{changeID}/versions")
+				requireBodyIncludes(t, body, "Administrative control API for trusted services")
+				requireBodyIncludes(t, body, "Native repository API")
+				requireBodyIncludes(t, body, "Git smart HTTP adapter")
+				requireBodyIncludes(t, body, "Repository amendment is an internal judgement operation")
 				requireBodyIncludes(t, body, "Idempotency-Key is required for proposals")
 				requireBodyIncludes(t, body, "Promotion is an opportunistic current result, not part of the admission guarantee")
 				requireBodyIncludes(t, body, "GET /git/repos/{repoID}.git/info/refs?service=git-upload-pack")

@@ -42,7 +42,7 @@ func (client Client) Submit(ctx context.Context, workdir string) error {
 	if err != nil {
 		return fmt.Errorf("read change title: %w", err)
 	}
-	state, found, err := loadSubmissionState(ctx, workdir, origin.repoID, head)
+	state, found, err := loadSubmissionRetryState(ctx, workdir, origin.repoID, head)
 	if err != nil {
 		return err
 	}
@@ -60,20 +60,20 @@ func (client Client) Submit(ctx context.Context, workdir string) error {
 		baseIntent := current.ID
 		var dependencies []string
 		var dependencyTitle string
-		workspace, workspaceFound, err := loadWorkspaceState(ctx, workdir, origin.repoID)
+		continuation, continuationFound, err := loadContinuationState(ctx, workdir, origin.repoID)
 		if err != nil {
 			return err
 		}
-		if workspaceFound {
-			if workspace.ParentRevision == head {
+		if continuationFound {
+			if continuation.ParentRevision == head {
 				return errors.New("workspace has no new committed content")
 			}
-			if err := requireAncestor(ctx, workdir, workspace.ParentRevision, head); err != nil {
+			if err := requireAncestor(ctx, workdir, continuation.ParentRevision, head); err != nil {
 				return errors.New("workspace is not based on its submitted change; sync before submitting")
 			}
-			baseIntent = workspace.BaseIntent
-			dependencies = []string{workspace.ParentVersion}
-			dependencyTitle = workspace.ParentTitle
+			baseIntent = continuation.BaseIntent
+			dependencies = []string{continuation.ParentVersion}
+			dependencyTitle = continuation.ParentTitle
 		} else if current.ContentRef.Revision == head {
 			return errors.New("workspace has no new committed content")
 		}
@@ -81,13 +81,13 @@ func (client Client) Submit(ctx context.Context, workdir string) error {
 		if err != nil {
 			return err
 		}
-		state = submissionState{
+		state = submissionRetryState{
 			BaseIntent:      baseIntent,
 			IdempotencyKey:  idempotencyKey,
 			Dependencies:    dependencies,
 			DependencyTitle: dependencyTitle,
 		}
-		if err := rememberSubmissionState(ctx, workdir, origin.repoID, head, state); err != nil {
+		if err := rememberSubmissionRetryState(ctx, workdir, origin.repoID, head, state); err != nil {
 			return err
 		}
 	}
@@ -108,7 +108,7 @@ func (client Client) Submit(ctx context.Context, workdir string) error {
 	}
 
 	if receipt.Promotion == nil {
-		if err := rememberWorkspaceState(ctx, workdir, origin.repoID, workspaceState{
+		if err := rememberContinuationState(ctx, workdir, origin.repoID, continuationState{
 			BaseIntent:     state.BaseIntent,
 			ParentChange:   receipt.Change.ID,
 			ParentVersion:  receipt.Version.ID,
@@ -118,15 +118,14 @@ func (client Client) Submit(ctx context.Context, workdir string) error {
 			return err
 		}
 		fmt.Fprintf(client.Stdout, "Submitted: %s\n", title)
+		fmt.Fprintln(client.Stdout, "Admitted; judgement pending")
 		if state.DependencyTitle != "" {
 			fmt.Fprintf(client.Stdout, "Waiting on: %s\n", state.DependencyTitle)
-		} else {
-			fmt.Fprintln(client.Stdout, "Held")
 		}
-		fmt.Fprintln(client.Stdout, "Started a new working change on top of it.")
+		fmt.Fprintln(client.Stdout, "Continue working on top of it.")
 		return nil
 	}
-	if err := forgetWorkspaceState(ctx, workdir, origin.repoID); err != nil {
+	if err := forgetContinuationState(ctx, workdir, origin.repoID); err != nil {
 		return err
 	}
 	fmt.Fprintf(client.Stdout, "Submitted: %s\n", title)
@@ -146,7 +145,7 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 	if err != nil {
 		return err
 	}
-	state, found, err := loadWorkspaceState(ctx, workdir, origin.repoID)
+	state, found, err := loadContinuationState(ctx, workdir, origin.repoID)
 	if err != nil {
 		return err
 	}
@@ -162,11 +161,40 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 	if err != nil {
 		return err
 	}
-	if found && current.ContentRef.Engine == "git" && current.ContentRef.Revision == state.ParentRevision {
-		if err := forgetWorkspaceState(ctx, workdir, origin.repoID); err != nil {
+	parentRelationship := "judgement pending"
+	if found {
+		change, err := client.change(ctx, origin, state.ParentChange)
+		if err != nil {
 			return err
 		}
-		found = false
+		if change.ID != state.ParentChange {
+			return errors.New("server returned a different submitted change")
+		}
+		switch {
+		case change.LatestVersion.ID == state.ParentVersion:
+			if change.LatestAmendment != nil {
+				return errors.New("server returned an invalid latest amendment")
+			}
+			if change.LatestPromotion != nil {
+				if change.LatestPromotion.Version != state.ParentVersion {
+					return errors.New("server returned an invalid latest promotion")
+				}
+				if err := forgetContinuationState(ctx, workdir, origin.repoID); err != nil {
+					return err
+				}
+				found = false
+			}
+		case change.LatestAmendment == nil ||
+			change.LatestAmendment.FromVersion != state.ParentVersion ||
+			change.LatestAmendment.ToVersion != change.LatestVersion.ID:
+			return errors.New("server returned an unsupported submitted change lineage")
+		case change.LatestPromotion == nil:
+			parentRelationship = "amended; judgement pending"
+		case change.LatestPromotion.Version != change.LatestVersion.ID:
+			return errors.New("server returned an invalid latest promotion")
+		default:
+			parentRelationship = "amended and accepted; run grd sync"
+		}
 	}
 	if !found {
 		if current.ContentRef.Engine == "git" && current.ContentRef.Revision == head {
@@ -183,7 +211,19 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 			return fmt.Errorf("read change title: %w", err)
 		}
 		fmt.Fprintf(client.Stdout, "Working: %s\n", title)
-		fmt.Fprintln(client.Stdout, "Based on: accepted intent")
+		if current.ContentRef.Engine != "git" || current.ContentRef.Revision == "" {
+			fmt.Fprintln(client.Stdout, "Based on: unknown (accepted intent is not Git content)")
+			return nil
+		}
+		basedOnIntent, err := isAncestor(ctx, workdir, current.ContentRef.Revision, head)
+		if err != nil {
+			return fmt.Errorf("check relationship to accepted intent: %w", err)
+		}
+		if basedOnIntent {
+			fmt.Fprintln(client.Stdout, "Based on: accepted intent")
+		} else {
+			fmt.Fprintln(client.Stdout, "Based on: unknown (workspace does not descend from accepted intent)")
+		}
 		return nil
 	}
 	if head != state.ParentRevision {
@@ -200,6 +240,6 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 	}
 	fmt.Fprintf(client.Stdout, "Working: %s\n", working)
 	fmt.Fprintln(client.Stdout, "Based on:")
-	fmt.Fprintf(client.Stdout, "  %s — held\n", state.ParentTitle)
+	fmt.Fprintf(client.Stdout, "  %s — %s\n", state.ParentTitle, parentRelationship)
 	return nil
 }

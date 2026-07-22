@@ -119,4 +119,12 @@ func TestJourneyJ14DivergedWorkspaceIsPreservedAndRefused(t *testing.T) {
 	if got := ion.head(); got != divergentRevision {
 		t.Fatalf("diverged workspace HEAD changed from %q to %q", divergentRevision, got)
 	}
+	status := ion.run(world.buildGRD(), "status")
+	if status.err != nil {
+		t.Fatalf("read diverged status: %v\n%s", status.err, status.stderr)
+	}
+	const wantStatus = "Working: divergent work\nBased on: unknown (workspace does not descend from accepted intent)\n"
+	if status.stdout != wantStatus {
+		t.Fatalf("diverged status = %q, want %q", status.stdout, wantStatus)
+	}
 }

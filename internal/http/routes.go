@@ -16,7 +16,7 @@ type Handlers struct {
 	RevokeRepoToken http.Handler
 	CurrentIntent   http.Handler
 	BootstrapIntent http.Handler
-	ProposeIntent   http.Handler
+	AdmitProposal   http.Handler
 	GetChange       http.Handler
 	ListVersions    http.Handler
 	GitSmartHTTP    http.Handler
@@ -53,12 +53,12 @@ func NewMux(h Handlers) *http.ServeMux {
 	mux.Handle("POST /v1/repos/{repoID}/tokens/{tokenID}/revoke", h.RevokeRepoToken)
 
 	currentIntent := handlerOrNotFound(h.CurrentIntent)
-	proposeIntent := handlerOrNotFound(h.ProposeIntent)
+	admitProposal := handlerOrNotFound(h.AdmitProposal)
 	getChange := handlerOrNotFound(h.GetChange)
 	listVersions := handlerOrNotFound(h.ListVersions)
 	mux.Handle("GET /v1/repos/{repoID}/intent", currentIntent)
 	mux.Handle("PUT /v1/repos/{repoID}/intent", handlerOrNotFound(h.BootstrapIntent))
-	mux.Handle("POST /v1/repos/{repoID}/proposals", proposeIntent)
+	mux.Handle("POST /v1/repos/{repoID}/proposals", admitProposal)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}", getChange)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}/versions", listVersions)
 

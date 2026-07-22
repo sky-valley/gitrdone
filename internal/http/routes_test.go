@@ -98,7 +98,7 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 				RevokeRepoToken: handler,
 				CurrentIntent:   handler,
 				BootstrapIntent: handler,
-				ProposeIntent:   handler,
+				AdmitProposal:   handler,
 				GetChange:       handler,
 				ListVersions:    handler,
 				GitSmartHTTP:    internalServerError(),
@@ -116,7 +116,7 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 			if gotTokenID != tt.wantTokenID {
 				t.Fatalf("tokenID = %q, want %q", gotTokenID, tt.wantTokenID)
 			}
-			if (tt.name == "get change" || tt.name == "list change versions") && gotChangeID != "change_abc" {
+			if (tt.name == "get change" || tt.name == "list change versions" || tt.name == "amend change") && gotChangeID != "change_abc" {
 				t.Fatalf("changeID = %q, want change_abc", gotChangeID)
 			}
 		})
