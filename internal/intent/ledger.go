@@ -16,6 +16,7 @@ type IntentStore interface {
 type ChangeStore interface {
 	Change(ctx context.Context, id ChangeID) (Change, bool, error)
 	Version(ctx context.Context, id VersionID) (Version, bool, error)
+	Dependents(ctx context.Context, id VersionID) ([]Version, error)
 	LatestVersion(ctx context.Context, changeID ChangeID) (Version, bool, error)
 	Versions(ctx context.Context, changeID ChangeID, after VersionID, limit int) ([]Version, bool, error)
 	ProposalByIdempotencyKey(ctx context.Context, key string) (Proposed, bool, error)
@@ -25,6 +26,7 @@ type ChangeStore interface {
 type PromotionJournal interface {
 	PendingPromotion(ctx context.Context) (PreparedPromotion, bool, error)
 	CompletedPromotion(ctx context.Context, versionID VersionID) (Promoted, bool, error)
+	CompletedPromotionByIntent(ctx context.Context, intentID RevisionID) (Promoted, bool, error)
 	PreparePromotion(ctx context.Context, prepared PreparedPromotion) error
 	CompletePromotion(ctx context.Context, promotionID PromotionID) error
 }
@@ -42,10 +44,12 @@ type transientLedger struct {
 	changes     map[ChangeID]Change
 	versions    map[VersionID]Version
 	versionIDs  map[ChangeID][]VersionID
+	dependents  map[VersionID][]VersionID
 	promotions  map[PromotionID]Promotion
 	prepared    map[PromotionID]PreparedPromotion
 	pending     PromotionID
 	completed   map[VersionID]PromotionID
+	byIntent    map[RevisionID]PromotionID
 	idempotency map[string]VersionID
 }
 
@@ -74,6 +78,17 @@ func (ledger *transientLedger) Version(_ context.Context, id VersionID) (Version
 	defer ledger.mu.RUnlock()
 	version, found := ledger.versions[id]
 	return cloneVersion(version), found, nil
+}
+
+func (ledger *transientLedger) Dependents(_ context.Context, id VersionID) ([]Version, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	ids := ledger.dependents[id]
+	versions := make([]Version, 0, len(ids))
+	for _, dependentID := range ids {
+		versions = append(versions, cloneVersion(ledger.versions[dependentID]))
+	}
+	return versions, nil
 }
 
 func (ledger *transientLedger) LatestVersion(_ context.Context, changeID ChangeID) (Version, bool, error) {
@@ -140,6 +155,17 @@ func (ledger *transientLedger) CompletedPromotion(_ context.Context, versionID V
 	return Promoted{Promotion: promotion, Intent: ledger.revisions[promotion.ToIntent]}, true, nil
 }
 
+func (ledger *transientLedger) CompletedPromotionByIntent(_ context.Context, intentID RevisionID) (Promoted, bool, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	promotionID, found := ledger.byIntent[intentID]
+	if !found {
+		return Promoted{}, false, nil
+	}
+	promotion := ledger.promotions[promotionID]
+	return Promoted{Promotion: promotion, Intent: ledger.revisions[promotion.ToIntent]}, true, nil
+}
+
 func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) error {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
@@ -148,9 +174,11 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.changes = make(map[ChangeID]Change)
 	ledger.versions = make(map[VersionID]Version)
 	ledger.versionIDs = make(map[ChangeID][]VersionID)
+	ledger.dependents = make(map[VersionID][]VersionID)
 	ledger.promotions = make(map[PromotionID]Promotion)
 	ledger.prepared = make(map[PromotionID]PreparedPromotion)
 	ledger.completed = make(map[VersionID]PromotionID)
+	ledger.byIntent = make(map[RevisionID]PromotionID)
 	ledger.idempotency = make(map[string]VersionID)
 	return nil
 }
@@ -161,6 +189,9 @@ func (ledger *transientLedger) RecordProposal(_ context.Context, key string, cha
 	ledger.changes[change.ID] = change
 	ledger.versions[version.ID] = cloneVersion(version)
 	ledger.versionIDs[change.ID] = append(ledger.versionIDs[change.ID], version.ID)
+	for _, dependencyID := range version.Dependencies {
+		ledger.dependents[dependencyID] = append(ledger.dependents[dependencyID], version.ID)
+	}
 	ledger.idempotency[key] = version.ID
 	return nil
 }
@@ -194,6 +225,7 @@ func (ledger *transientLedger) CompletePromotion(_ context.Context, promotionID 
 	ledger.promotions[promotionID] = prepared.Promotion
 	ledger.revisions[prepared.Intent.ID] = prepared.Intent
 	ledger.completed[prepared.Promotion.VersionID] = promotionID
+	ledger.byIntent[prepared.Promotion.ToIntent] = promotionID
 	ledger.current = prepared.Intent
 	delete(ledger.prepared, promotionID)
 	ledger.pending = ""

@@ -130,6 +130,23 @@ func (ledger *Ledger) Version(ctx context.Context, id intent.VersionID) (intent.
 	return cloneVersion(version), found, nil
 }
 
+func (ledger *Ledger) Dependents(ctx context.Context, id intent.VersionID) ([]intent.Version, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return nil, errors.New("journal is closed")
+	}
+	ids := ledger.state.dependents[id]
+	versions := make([]intent.Version, 0, len(ids))
+	for _, dependentID := range ids {
+		versions = append(versions, cloneVersion(ledger.state.versions[dependentID]))
+	}
+	return versions, nil
+}
+
 func (ledger *Ledger) LatestVersion(ctx context.Context, changeID intent.ChangeID) (intent.Version, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return intent.Version{}, false, err
@@ -220,6 +237,26 @@ func (ledger *Ledger) CompletedPromotion(ctx context.Context, versionID intent.V
 		return intent.Promoted{}, false, errors.New("journal is closed")
 	}
 	promotionID, found := ledger.state.completed[versionID]
+	if !found {
+		return intent.Promoted{}, false, nil
+	}
+	promotion := ledger.state.promotions[promotionID]
+	return intent.Promoted{
+		Promotion: promotion,
+		Intent:    ledger.state.revisions[promotion.ToIntent],
+	}, true, nil
+}
+
+func (ledger *Ledger) CompletedPromotionByIntent(ctx context.Context, intentID intent.RevisionID) (intent.Promoted, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return intent.Promoted{}, false, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return intent.Promoted{}, false, errors.New("journal is closed")
+	}
+	promotionID, found := ledger.state.byIntent[intentID]
 	if !found {
 		return intent.Promoted{}, false, nil
 	}

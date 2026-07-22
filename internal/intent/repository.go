@@ -223,6 +223,14 @@ func (repository *Repository) InspectChange(ctx context.Context, id ChangeID) (C
 	return inspection, nil
 }
 
+func (repository *Repository) Promotion(ctx context.Context, versionID VersionID) (Promoted, bool, error) {
+	promoted, found, err := repository.promotions.CompletedPromotion(ctx, versionID)
+	if err != nil {
+		return Promoted{}, false, fmt.Errorf("read version promotion: %w", err)
+	}
+	return promoted, found, nil
+}
+
 func (repository *Repository) Versions(ctx context.Context, query VersionQuery) (VersionPage, error) {
 	if query.ChangeID == "" {
 		return VersionPage{}, errors.New("change id is required")
@@ -357,12 +365,16 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 	if !found {
 		return Promoted{}, ErrVersionNotFound
 	}
+	dependencyPromotions := make([]Promoted, 0, len(version.Dependencies))
 	for _, dependencyID := range version.Dependencies {
-		if _, found, err := repository.promotions.CompletedPromotion(ctx, dependencyID); err != nil {
+		promoted, found, err := repository.promotions.CompletedPromotion(ctx, dependencyID)
+		if err != nil {
 			return Promoted{}, fmt.Errorf("read dependency promotion: %w", err)
-		} else if !found {
+		}
+		if !found {
 			return Promoted{}, ErrDependenciesPending
 		}
+		dependencyPromotions = append(dependencyPromotions, promoted)
 	}
 	current, found, err := repository.intents.CurrentIntent(ctx)
 	if err != nil {
@@ -371,8 +383,20 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 	if !found {
 		return Promoted{}, errors.New("intent ledger is not initialized")
 	}
-	if request.ExpectedIntent != current.ID || version.BaseIntent != current.ID {
+	if request.ExpectedIntent != current.ID {
 		return Promoted{}, ErrIntentAdvanced
+	}
+	if version.BaseIntent != current.ID {
+		currentProducedByDependency := false
+		for _, promoted := range dependencyPromotions {
+			if promoted.Intent.ID == current.ID {
+				currentProducedByDependency = true
+				break
+			}
+		}
+		if !currentProducedByDependency {
+			return Promoted{}, ErrIntentAdvanced
+		}
 	}
 
 	nextIntentID, err := newID("intent")

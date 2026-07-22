@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -115,6 +116,63 @@ func TestHeldSubmissionCanPromoteWithoutLeavingAStaleWorkspaceDependency(t *test
 	}
 }
 
+func TestJourneyJ22PromotingParentReconsidersSubmittedDependent(t *testing.T) {
+	triage := &journeyDependencyTriage{}
+	world := newJourneyWorldWithTriage(t, triage)
+	ion := world.cloneWorkspace("ion")
+	grd := world.buildGRD()
+
+	parentRevision := ion.commitFile("auth.txt", "shared authentication base\n", "refactor authentication")
+	triage.parentRevision = parentRevision
+	parent := ion.run(grd, "submit")
+	if parent.err != nil {
+		t.Fatalf("submit held parent: %v\nstderr:\n%s", parent.err, parent.stderr)
+	}
+	dependentRevision := ion.commitFile("passkey.txt", "passkey support\n", "add passkey support")
+	dependent := ion.run(grd, "submit")
+	if dependent.err != nil {
+		t.Fatalf("submit waiting dependent: %v\nstderr:\n%s", dependent.err, dependent.stderr)
+	}
+	const wantWaiting = "Submitted: add passkey support\nWaiting on: refactor authentication\nStarted a new working change on top of it.\n"
+	if dependent.stdout != wantWaiting {
+		t.Fatalf("dependent submit stdout = %q, want %q", dependent.stdout, wantWaiting)
+	}
+	if got := world.canonicalHead(); got == dependentRevision {
+		t.Fatal("dependent reached canonical main before its parent promoted")
+	}
+
+	// Retrying the frozen parent stands in for the later judgement event. The
+	// dependent itself is not resubmitted.
+	reconsiderPath := filepath.Join(t.TempDir(), "parent-reconsideration")
+	requireGitSuccess(t, "create parent reconsideration workspace", "-C", ion.path, "worktree", "add", "--detach", reconsiderPath, parentRevision)
+	reconsideration := (&journeyWorkspace{t: t, path: reconsiderPath, token: ion.token}).run(grd, "submit")
+	if reconsideration.err != nil {
+		t.Fatalf("reconsider parent: %v\nstderr:\n%s", reconsideration.err, reconsideration.stderr)
+	}
+	const wantParentPromotion = "Submitted: refactor authentication\nPromoted\nYou can keep working.\n"
+	if reconsideration.stdout != wantParentPromotion {
+		t.Fatalf("parent reconsideration stdout = %q, want %q", reconsideration.stdout, wantParentPromotion)
+	}
+	if got := world.canonicalHead(); got != dependentRevision {
+		t.Fatalf("canonical main = %q, want automatically reconsidered dependent %q", got, dependentRevision)
+	}
+	if got := world.currentIntent().ContentRef.Revision; got != dependentRevision {
+		t.Fatalf("current intent revision = %q, want dependent %q", got, dependentRevision)
+	}
+	parentCalls, dependentCalls := triage.calls()
+	if parentCalls != 2 || dependentCalls != 2 {
+		t.Fatalf("triage calls = parent %d, dependent %d; want 2 initial/reconsideration calls each", parentCalls, dependentCalls)
+	}
+	status := ion.run(grd, "status")
+	if status.err != nil {
+		t.Fatalf("status after dependent promotion: %v\nstderr:\n%s", status.err, status.stderr)
+	}
+	const wantStatus = "Working: new change\nBased on: accepted intent\n"
+	if status.stdout != wantStatus {
+		t.Fatalf("status after dependent promotion = %q, want %q", status.stdout, wantStatus)
+	}
+}
+
 type recordingHoldTriage struct {
 	mu        sync.Mutex
 	proposals []intent.Proposed
@@ -146,4 +204,31 @@ func (triage *holdThenPromoteTriage) DecideNext(context.Context, intent.Proposed
 		return intentservice.Hold, nil
 	}
 	return intentservice.Promote, nil
+}
+
+type journeyDependencyTriage struct {
+	mu             sync.Mutex
+	parentRevision string
+	parentCalls    int
+	dependentCalls int
+}
+
+func (triage *journeyDependencyTriage) DecideNext(_ context.Context, proposed intent.Proposed) (intentservice.NextAction, error) {
+	triage.mu.Lock()
+	defer triage.mu.Unlock()
+	if proposed.Version.Content.Revision == triage.parentRevision {
+		triage.parentCalls++
+		if triage.parentCalls == 1 {
+			return intentservice.Hold, nil
+		}
+		return intentservice.Promote, nil
+	}
+	triage.dependentCalls++
+	return intentservice.Promote, nil
+}
+
+func (triage *journeyDependencyTriage) calls() (int, int) {
+	triage.mu.Lock()
+	defer triage.mu.Unlock()
+	return triage.parentCalls, triage.dependentCalls
 }

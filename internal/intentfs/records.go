@@ -22,10 +22,12 @@ type journalState struct {
 	changes     map[intent.ChangeID]intent.Change
 	versions    map[intent.VersionID]intent.Version
 	versionIDs  map[intent.ChangeID][]intent.VersionID
+	dependents  map[intent.VersionID][]intent.VersionID
 	promotions  map[intent.PromotionID]intent.Promotion
 	prepared    map[intent.PromotionID]intent.PreparedPromotion
 	pending     intent.PromotionID
 	completed   map[intent.VersionID]intent.PromotionID
+	byIntent    map[intent.RevisionID]intent.PromotionID
 	idempotency map[string]intent.VersionID
 }
 
@@ -216,9 +218,11 @@ func newJournalState() journalState {
 		changes:     make(map[intent.ChangeID]intent.Change),
 		versions:    make(map[intent.VersionID]intent.Version),
 		versionIDs:  make(map[intent.ChangeID][]intent.VersionID),
+		dependents:  make(map[intent.VersionID][]intent.VersionID),
 		promotions:  make(map[intent.PromotionID]intent.Promotion),
 		prepared:    make(map[intent.PromotionID]intent.PreparedPromotion),
 		completed:   make(map[intent.VersionID]intent.PromotionID),
+		byIntent:    make(map[intent.RevisionID]intent.PromotionID),
 		idempotency: make(map[string]intent.VersionID),
 	}
 }
@@ -235,6 +239,9 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			state.changes[record.Change.ID] = *record.Change
 			state.versions[record.Version.ID] = cloneVersion(*record.Version)
 			state.versionIDs[record.Change.ID] = append(state.versionIDs[record.Change.ID], record.Version.ID)
+			for _, dependencyID := range record.Version.Dependencies {
+				state.dependents[dependencyID] = append(state.dependents[dependencyID], record.Version.ID)
+			}
 			state.idempotency[record.IdempotencyKey] = record.Version.ID
 		}
 	case promotionPrepared:
@@ -252,6 +259,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			state.revisions[prepared.Intent.ID] = prepared.Intent
 			state.promotions[prepared.Promotion.ID] = prepared.Promotion
 			state.completed[prepared.Promotion.VersionID] = prepared.Promotion.ID
+			state.byIntent[prepared.Promotion.ToIntent] = prepared.Promotion.ID
 			state.current = prepared.Intent
 			delete(state.prepared, prepared.Promotion.ID)
 			state.pending = ""
@@ -261,6 +269,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			state.revisions[record.NextIntent.ID] = *record.NextIntent
 			state.promotions[record.Promotion.ID] = *record.Promotion
 			state.completed[record.Promotion.VersionID] = record.Promotion.ID
+			state.byIntent[record.Promotion.ToIntent] = record.Promotion.ID
 			state.current = *record.NextIntent
 		}
 	}

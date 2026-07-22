@@ -66,6 +66,113 @@ func TestRepositoryAdmitsDependentVersionAndRefusesPrematurePromotion(t *testing
 	}
 }
 
+func TestRepositoryPromotesDependentAgainstIntentProducedByItsDependency(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	projection := &recordingProjection{current: initialContent}
+	repository, err := intent.NewRepository(initialContent, &recordingAdmission{}, projection)
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	initial := repository.CurrentIntent()
+	parent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "request-parent",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose parent: %v", err)
+	}
+	dependent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "request-dependent",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
+		Dependencies:   []intent.VersionID{parent.Version.ID},
+	})
+	if err != nil {
+		t.Fatalf("propose dependent: %v", err)
+	}
+	parentPromotion, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      parent.Version.ID,
+		ExpectedIntent: initial.ID,
+	})
+	if err != nil {
+		t.Fatalf("promote parent: %v", err)
+	}
+
+	ready, err := repository.ReadyDependents(ctx)
+	if err != nil {
+		t.Fatalf("read ready dependents: %v", err)
+	}
+	if len(ready) != 1 || ready[0].Version.ID != dependent.Version.ID {
+		t.Fatalf("ready dependents = %#v, want dependent version %q", ready, dependent.Version.ID)
+	}
+	dependentPromotion, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      dependent.Version.ID,
+		ExpectedIntent: parentPromotion.Intent.ID,
+	})
+	if err != nil {
+		t.Fatalf("promote dependent: %v", err)
+	}
+	if dependentPromotion.Promotion.FromIntent != parentPromotion.Intent.ID {
+		t.Fatalf("dependent promoted from %q, want parent intent %q", dependentPromotion.Promotion.FromIntent, parentPromotion.Intent.ID)
+	}
+	if got := repository.CurrentIntent().Content; got != dependent.Version.Content {
+		t.Fatalf("current content = %#v, want dependent content %#v", got, dependent.Version.Content)
+	}
+}
+
+func TestRepositoryDoesNotTreatDependentAsReadyAfterUnrelatedIntentAdvance(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, &recordingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	initial := repository.CurrentIntent()
+	parent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "request-parent",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose parent: %v", err)
+	}
+	_, err = repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "request-dependent",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
+		Dependencies:   []intent.VersionID{parent.Version.ID},
+	})
+	if err != nil {
+		t.Fatalf("propose dependent: %v", err)
+	}
+	unrelated, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "request-unrelated",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "dddddddd"},
+		Producer:       "noam",
+	})
+	if err != nil {
+		t.Fatalf("propose unrelated: %v", err)
+	}
+	if _, err := repository.Promote(ctx, intent.PromoteRequest{VersionID: unrelated.Version.ID, ExpectedIntent: initial.ID}); err != nil {
+		t.Fatalf("promote unrelated: %v", err)
+	}
+
+	ready, err := repository.ReadyDependents(ctx)
+	if err != nil {
+		t.Fatalf("read ready dependents: %v", err)
+	}
+	if len(ready) != 0 {
+		t.Fatalf("ready dependents = %#v, want none after unrelated intent advance", ready)
+	}
+}
+
 func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 	ctx := context.Background()
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
