@@ -101,11 +101,17 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 		return err
 	}
 
-	if err := gitRun(ctx, workdir, "rebase", "--onto", targetRevision, state.ParentRevision); err != nil {
-		if abortErr := gitRun(ctx, workdir, "rebase", "--abort"); abortErr != nil {
-			return fmt.Errorf("automatic replay conflicted and Git could not restore the workspace; recover from %s", recoveryRef)
+	if commitCount == 0 {
+		if err := gitRun(ctx, workdir, "reset", "--hard", targetRevision); err != nil {
+			return fmt.Errorf("update workspace to accepted amendment; recover from %s", recoveryRef)
 		}
-		return fmt.Errorf("automatic replay conflicted; original work was restored and preserved at %s", recoveryRef)
+	} else {
+		if err := gitRun(ctx, workdir, "rebase", "--onto", targetRevision, state.ParentRevision); err != nil {
+			if abortErr := gitRun(ctx, workdir, "rebase", "--abort"); abortErr != nil {
+				return fmt.Errorf("automatic replay conflicted and Git could not restore the workspace; recover from %s", recoveryRef)
+			}
+			return fmt.Errorf("automatic replay conflicted; original work was restored and preserved at %s", recoveryRef)
+		}
 	}
 	if err := forgetContinuationState(ctx, workdir, origin.repoID); err != nil {
 		return err
@@ -113,7 +119,9 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 
 	fmt.Fprintf(client.Stdout, "Synced: %s\n", state.ParentTitle)
 	fmt.Fprintf(client.Stdout, "Repository amendment: %s\n", change.LatestAmendment.Rationale)
-	if commitCount == 1 {
+	if commitCount == 0 {
+		fmt.Fprintln(client.Stdout, "Workspace updated to accepted amendment.")
+	} else if commitCount == 1 {
 		fmt.Fprintln(client.Stdout, "Replayed: 1 local commit")
 	} else {
 		fmt.Fprintf(client.Stdout, "Replayed: %d local commits\n", commitCount)
