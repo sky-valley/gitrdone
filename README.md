@@ -161,16 +161,20 @@ PUT /v1/repos/{repoID}/intent
 
 ## Native repository API
 
-`GET /v1/repos/{repoID}/intent`, `GET /v1/repos/{repoID}/changes/{changeID}`, and the corresponding `/versions` collection accept a `read` or `readwrite` repo token. `POST /v1/repos/{repoID}/proposals` accepts a `write` or `readwrite` repo token plus `Idempotency-Key`; the admitted producer is derived from the token subject rather than request JSON. A proposal may include `dependencies`, an array of exact admitted version IDs that must promote before the dependent version can promote. The control bearer remains accepted on these routes for trusted service callers. Root-intent bootstrap remains control-only.
+`GET /v1/repos/{repoID}/intent`, change and conflict inspection, and the corresponding `/versions` collection accept a `read` or `readwrite` repo token. `POST /v1/repos/{repoID}/proposals` and `POST /v1/repos/{repoID}/reconciliation-conflicts` accept a `write` or `readwrite` repo token plus `Idempotency-Key`; the admitted producer is derived from the token subject rather than request JSON. A proposal may include `dependencies`, an array of exact admitted version IDs that must promote before the dependent version can promote. The control bearer remains accepted on these routes for trusted service callers. Root-intent bootstrap remains control-only.
 
 ```text
 GET  /v1/repos/{repoID}/intent
 POST /v1/repos/{repoID}/proposals
 GET  /v1/repos/{repoID}/changes/{changeID}
 GET  /v1/repos/{repoID}/changes/{changeID}/versions
+POST /v1/repos/{repoID}/reconciliation-conflicts
+GET  /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}
 ```
 
 Repository amendment is an internal judgement operation, not a public command. Change inspection exposes `latestAmendment` and `latestPromotion` when those outcomes exist; the bounded versions collection preserves the immutable history.
+
+A reconciliation-conflict POST records the authenticated observation that an already-admitted descendant version C could not be replayed from submitted B onto the still-current accepted amendment B′. It preserves C's existing Change/Version identity, records the authenticated reporter as `reportedBy`, and returns a durable conflict in `awaiting_judgement` state. Affected paths are optional, bounded adapter diagnostics, not a replacement for jj-core's future conflicted-content representation.
 
 ## grd client
 
@@ -183,7 +187,7 @@ grd status
 grd sync
 ```
 
-`grd submit` publishes the current committed content and admits it for judgement. Immediate promotion is reported directly. Otherwise the client reports judgement as pending and records a local continuation cursor so subsequent work can be submitted with an explicit dependency on that exact version. `grd status` shows the last known relationship between the active workspace and its submitted parent, includes the rationale for a pending repository amendment, and only claims it is based on accepted intent after checking Git ancestry. If the repository amends and promotes that submitted version, `grd sync` fetches the accepted version, creates a recovery ref, and explains the repository rationale. A workspace still at the submitted version moves directly to the accepted amendment; clean local successor commits are replayed onto it. The current Git adapter still requires a clean committed workspace; durable conflict handling and automatic working-change snapshots remain native-client targets.
+`grd submit` publishes the current committed content and admits it for judgement. Immediate promotion is reported directly. Otherwise the client reports judgement as pending and records a local continuation cursor so subsequent work can be submitted with an explicit dependency on that exact version. `grd status` shows the last known relationship between the active workspace and its submitted parent, includes the rationale for a pending repository amendment, and only claims it is based on accepted intent after checking Git ancestry. If the repository amends and promotes that submitted version, `grd sync` fetches the accepted version, creates a recovery ref, and explains the repository rationale. A workspace still at the submitted version moves directly to the accepted amendment; clean local successor commits are replayed onto it. If replay conflicts, the Git adapter restores the original workspace, first admits C with ordinary Change/Version identity, then records durable reconciliation work against that existing version and waits for judgement. Git path diagnostics are optional evidence, not a custom conflict representation; jj-core remains the intended engine for first-class conflicted versions and automatic descendant rebasing.
 
 ## Git adapter access
 

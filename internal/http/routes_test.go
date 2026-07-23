@@ -57,6 +57,18 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 			wantRepoID: "repo_123",
 		},
 		{
+			name:       "record reconciliation conflict",
+			method:     http.MethodPost,
+			target:     "/v1/repos/repo_123/reconciliation-conflicts",
+			wantRepoID: "repo_123",
+		},
+		{
+			name:       "get reconciliation conflict",
+			method:     http.MethodGet,
+			target:     "/v1/repos/repo_123/reconciliation-conflicts/conflict_abc",
+			wantRepoID: "repo_123",
+		},
+		{
 			name:       "get change",
 			method:     http.MethodGet,
 			target:     "/v1/repos/repo_123/changes/change_abc",
@@ -82,26 +94,30 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 			var gotRepoID string
 			var gotTokenID string
 			var gotChangeID string
+			var gotConflictID string
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotRepoID = r.PathValue("repoID")
 				gotTokenID = r.PathValue("tokenID")
 				gotChangeID = r.PathValue("changeID")
+				gotConflictID = r.PathValue("conflictID")
 				w.WriteHeader(http.StatusNoContent)
 			})
 			mux := NewMux(Handlers{
-				Healthz:         internalServerError(),
-				CreateRepo:      internalServerError(),
-				GetRepo:         handler,
-				ArchiveRepo:     handler,
-				CreateRepoToken: handler,
-				ListRepoTokens:  handler,
-				RevokeRepoToken: handler,
-				CurrentIntent:   handler,
-				BootstrapIntent: handler,
-				AdmitProposal:   handler,
-				GetChange:       handler,
-				ListVersions:    handler,
-				GitSmartHTTP:    internalServerError(),
+				Healthz:                      internalServerError(),
+				CreateRepo:                   internalServerError(),
+				GetRepo:                      handler,
+				ArchiveRepo:                  handler,
+				CreateRepoToken:              handler,
+				ListRepoTokens:               handler,
+				RevokeRepoToken:              handler,
+				CurrentIntent:                handler,
+				BootstrapIntent:              handler,
+				AdmitProposal:                handler,
+				RecordReconciliationConflict: handler,
+				GetReconciliationConflict:    handler,
+				GetChange:                    handler,
+				ListVersions:                 handler,
+				GitSmartHTTP:                 internalServerError(),
 			})
 
 			rec := httptest.NewRecorder()
@@ -118,6 +134,9 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 			}
 			if (tt.name == "get change" || tt.name == "list change versions" || tt.name == "amend change") && gotChangeID != "change_abc" {
 				t.Fatalf("changeID = %q, want change_abc", gotChangeID)
+			}
+			if tt.name == "get reconciliation conflict" && gotConflictID != "conflict_abc" {
+				t.Fatalf("conflictID = %q, want conflict_abc", gotConflictID)
 			}
 		})
 	}

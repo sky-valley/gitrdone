@@ -26,6 +26,7 @@ type continuationState struct {
 	ParentVersion  string `json:"parentVersion"`
 	ParentRevision string `json:"parentRevision"`
 	ParentTitle    string `json:"parentTitle"`
+	ConflictID     string `json:"conflictId,omitempty"`
 }
 
 func loadSubmissionRetryState(ctx context.Context, workdir string, repoID string, revision string) (submissionRetryState, bool, error) {
@@ -110,6 +111,19 @@ func submissionRetryStateKey(repoID string, revision string) string {
 func continuationStateKey(repoID string) string {
 	digest := sha256.Sum256([]byte(repoID))
 	return "grd-workspace." + hex.EncodeToString(digest[:]) + ".state"
+}
+
+func reconciliationDescendantIdempotencyKey(repoID, fromVersion, toVersion, descendantRevision string) string {
+	return reconciliationIdempotencyKey("descendant", repoID, fromVersion, toVersion, descendantRevision)
+}
+
+func reconciliationConflictIdempotencyKey(repoID, fromVersion, toVersion, descendantVersion string) string {
+	return reconciliationIdempotencyKey("record", repoID, fromVersion, toVersion, descendantVersion)
+}
+
+func reconciliationIdempotencyKey(operation, repoID, fromVersion, toVersion, descendant string) string {
+	digest := sha256.Sum256([]byte(operation + "\x00" + repoID + "\x00" + fromVersion + "\x00" + toVersion + "\x00" + descendant))
+	return "grd-conflict-" + operation + "-" + hex.EncodeToString(digest[:])
 }
 
 func newIdempotencyKey() (string, error) {

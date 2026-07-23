@@ -124,7 +124,8 @@ type Repository struct {
 	changes     ChangeStore
 	amendments  AmendmentStore
 	promotions  PromotionJournal
-	conflict    *ReconciliationConflict
+	conflicts   ReconciliationConflictStore
+	conflict    *ProjectionConflict
 }
 
 func NewRepository(initial ContentRef, admission ContentAdmission, projection TrunkProjection) (*Repository, error) {
@@ -171,9 +172,10 @@ func OpenRepository(ctx context.Context, initial ContentRef, ledger Ledger, admi
 		changes:    ledger,
 		amendments: ledger,
 		promotions: ledger,
+		conflicts:  ledger,
 	}
 	if err := repository.Reconcile(ctx); err != nil {
-		var conflict *ReconciliationConflict
+		var conflict *ProjectionConflict
 		if !errors.As(err, &conflict) {
 			return nil, fmt.Errorf("reconcile repository: %w", err)
 		}
@@ -187,11 +189,11 @@ func (repository *Repository) CurrentIntent() Revision {
 	return repository.current
 }
 
-func (repository *Repository) ReconciliationConflict() (ReconciliationConflict, bool) {
+func (repository *Repository) ProjectionConflict() (ProjectionConflict, bool) {
 	repository.stateMu.RLock()
 	defer repository.stateMu.RUnlock()
 	if repository.conflict == nil {
-		return ReconciliationConflict{}, false
+		return ProjectionConflict{}, false
 	}
 	return *repository.conflict, true
 }
@@ -445,7 +447,7 @@ func (repository *Repository) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("read pending promotion: %w", err)
 	}
 	if !found {
-		repository.setReconciliationConflict(nil)
+		repository.setProjectionConflict(nil)
 		return nil
 	}
 	_, err = repository.reconcileAndRemember(ctx, pending)
@@ -455,13 +457,13 @@ func (repository *Repository) Reconcile(ctx context.Context) error {
 func (repository *Repository) reconcileAndRemember(ctx context.Context, prepared PreparedPromotion) (Promoted, error) {
 	promoted, err := repository.reconcilePrepared(ctx, prepared)
 	if err != nil {
-		var conflict *ReconciliationConflict
+		var conflict *ProjectionConflict
 		if errors.As(err, &conflict) {
-			repository.setReconciliationConflict(conflict)
+			repository.setProjectionConflict(conflict)
 		}
 		return Promoted{}, err
 	}
-	repository.setReconciliationConflict(nil)
+	repository.setProjectionConflict(nil)
 	return promoted, nil
 }
 
@@ -494,7 +496,7 @@ func (repository *Repository) reconcilePrepared(ctx context.Context, prepared Pr
 		}
 	}
 	if actual != prepared.Intent.Content {
-		return Promoted{}, &ReconciliationConflict{
+		return Promoted{}, &ProjectionConflict{
 			Prepared: prepared,
 			Expected: from.Content,
 			Actual:   actual,
@@ -514,19 +516,19 @@ func (repository *Repository) reconcilePrepared(ctx context.Context, prepared Pr
 	}, nil
 }
 
-func (repository *Repository) setReconciliationConflict(conflict *ReconciliationConflict) {
+func (repository *Repository) setProjectionConflict(conflict *ProjectionConflict) {
 	repository.stateMu.Lock()
 	defer repository.stateMu.Unlock()
 	repository.conflict = conflict
 }
 
-type ReconciliationConflict struct {
+type ProjectionConflict struct {
 	Prepared PreparedPromotion
 	Expected ContentRef
 	Actual   ContentRef
 }
 
-func (conflict *ReconciliationConflict) Error() string {
+func (conflict *ProjectionConflict) Error() string {
 	return "trunk projection diverged from the prepared promotion"
 }
 

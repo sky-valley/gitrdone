@@ -17,20 +17,24 @@ const maxRequestBodyBytes = 64 * 1024
 const defaultVersionPageSize = 50
 
 type Handlers struct {
-	CurrentIntent http.Handler
-	Bootstrap     http.Handler
-	AdmitProposal http.Handler
-	GetChange     http.Handler
-	ListVersions  http.Handler
+	CurrentIntent                http.Handler
+	Bootstrap                    http.Handler
+	AdmitProposal                http.Handler
+	RecordReconciliationConflict http.Handler
+	GetReconciliationConflict    http.Handler
+	GetChange                    http.Handler
+	ListVersions                 http.Handler
 }
 
 func NewHandlers(service *intentservice.Service) Handlers {
 	return Handlers{
-		CurrentIntent: currentIntentHandler(service),
-		Bootstrap:     bootstrapHandler(service),
-		AdmitProposal: admitProposalHandler(service),
-		GetChange:     getChangeHandler(service),
-		ListVersions:  listVersionsHandler(service),
+		CurrentIntent:                currentIntentHandler(service),
+		Bootstrap:                    bootstrapHandler(service),
+		AdmitProposal:                admitProposalHandler(service),
+		RecordReconciliationConflict: recordReconciliationConflictHandler(service),
+		GetReconciliationConflict:    getReconciliationConflictHandler(service),
+		GetChange:                    getChangeHandler(service),
+		ListVersions:                 listVersionsHandler(service),
 	}
 }
 

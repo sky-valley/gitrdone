@@ -37,11 +37,18 @@ type PromotionJournal interface {
 	CompletePromotion(ctx context.Context, promotionID PromotionID) error
 }
 
+type ReconciliationConflictStore interface {
+	ReconciliationConflict(ctx context.Context, id ConflictID) (ReconciliationConflict, bool, error)
+	ReconciliationConflictByIdempotencyKey(ctx context.Context, key string) (ReconciliationConflict, bool, error)
+	RecordReconciliationConflict(ctx context.Context, key string, conflict ReconciliationConflict) error
+}
+
 type Ledger interface {
 	IntentStore
 	ChangeStore
 	AmendmentStore
 	PromotionJournal
+	ReconciliationConflictStore
 }
 
 type transientLedger struct {
@@ -58,6 +65,7 @@ type transientLedger struct {
 	pending     PromotionID
 	completed   map[VersionID]PromotionID
 	byIntent    map[RevisionID]PromotionID
+	conflicts   map[ConflictID]ReconciliationConflict
 	idempotency map[string]transientIdempotencyRecord
 }
 
@@ -66,11 +74,13 @@ type transientIdempotencyOperation uint8
 const (
 	transientProposalOperation transientIdempotencyOperation = iota + 1
 	transientAmendmentOperation
+	transientReconciliationConflictOperation
 )
 
 type transientIdempotencyRecord struct {
-	operation transientIdempotencyOperation
-	versionID VersionID
+	operation  transientIdempotencyOperation
+	versionID  VersionID
+	conflictID ConflictID
 }
 
 func (ledger *transientLedger) CurrentIntent(context.Context) (Revision, bool, error) {
@@ -230,6 +240,7 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.prepared = make(map[PromotionID]PreparedPromotion)
 	ledger.completed = make(map[VersionID]PromotionID)
 	ledger.byIntent = make(map[RevisionID]PromotionID)
+	ledger.conflicts = make(map[ConflictID]ReconciliationConflict)
 	ledger.idempotency = make(map[string]transientIdempotencyRecord)
 	return nil
 }

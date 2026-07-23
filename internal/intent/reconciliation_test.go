@@ -234,9 +234,9 @@ func TestRepositoryExposesUnexpectedTrunkWithoutOverwritingIt(t *testing.T) {
 		VersionID:      proposed.Version.ID,
 		ExpectedIntent: initialIntent.ID,
 	})
-	var conflict *intent.ReconciliationConflict
+	var conflict *intent.ProjectionConflict
 	if !errors.As(err, &conflict) {
-		t.Fatalf("promote error = %v, want ReconciliationConflict", err)
+		t.Fatalf("promote error = %v, want ProjectionConflict", err)
 	}
 	if conflict.Expected != initialContent || conflict.Prepared.Intent.Content != proposedContent || conflict.Actual != unexpectedContent {
 		t.Fatalf("reconciliation conflict = %#v, want expected A, target B, actual C", conflict)
@@ -247,7 +247,7 @@ func TestRepositoryExposesUnexpectedTrunkWithoutOverwritingIt(t *testing.T) {
 	if got := repository.CurrentIntent(); got != initialIntent {
 		t.Fatalf("intent after conflict = %#v, want %#v", got, initialIntent)
 	}
-	if stored, found := repository.ReconciliationConflict(); !found || stored != *conflict {
+	if stored, found := repository.ProjectionConflict(); !found || stored != *conflict {
 		t.Fatalf("exposed conflict = %#v, %t; want %#v, true", stored, found, *conflict)
 	}
 	prepared, found, err := ledger.PendingPromotion(ctx)
@@ -267,7 +267,7 @@ func TestRepositoryExposesUnexpectedTrunkWithoutOverwritingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restart conflicted repository: %v", err)
 	}
-	if stored, found := restarted.ReconciliationConflict(); !found || stored != *conflict {
+	if stored, found := restarted.ProjectionConflict(); !found || stored != *conflict {
 		t.Fatalf("restarted conflict = %#v, %t; want %#v, true", stored, found, *conflict)
 	}
 	if projection.current != unexpectedContent || len(projection.advances) != 0 {
@@ -304,9 +304,9 @@ func TestRepositoryClassifiesConcurrentTrunkAdvanceImmediately(t *testing.T) {
 		VersionID:      proposed.Version.ID,
 		ExpectedIntent: initialIntent.ID,
 	})
-	var conflict *intent.ReconciliationConflict
+	var conflict *intent.ProjectionConflict
 	if !errors.As(err, &conflict) {
-		t.Fatalf("promote error = %v, want ReconciliationConflict", err)
+		t.Fatalf("promote error = %v, want ProjectionConflict", err)
 	}
 	if conflict.Expected != initialContent || conflict.Prepared.Intent.Content != proposedContent || conflict.Actual != concurrentContent {
 		t.Fatalf("reconciliation conflict = %#v, want expected A, target B, actual C", conflict)
@@ -314,7 +314,7 @@ func TestRepositoryClassifiesConcurrentTrunkAdvanceImmediately(t *testing.T) {
 	if projection.current != concurrentContent || projection.advances != 1 {
 		t.Fatalf("projection after race = %#v with %d advances; want C with one rejected CAS", projection.current, projection.advances)
 	}
-	if stored, found := repository.ReconciliationConflict(); !found || stored != *conflict {
+	if stored, found := repository.ProjectionConflict(); !found || stored != *conflict {
 		t.Fatalf("exposed conflict = %#v, %t; want %#v, true", stored, found, *conflict)
 	}
 }

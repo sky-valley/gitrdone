@@ -164,6 +164,7 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 	}
 	parentRelationship := "judgement pending"
 	pendingAmendmentRationale := ""
+	var pendingReconciliation *reconciliationConflictResponse
 	if found {
 		change, err := client.change(ctx, origin, state.ParentChange)
 		if err != nil {
@@ -199,7 +200,16 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 		case change.LatestPromotion.Version != change.LatestVersion.ID:
 			return errors.New("server returned an invalid latest promotion")
 		default:
-			parentRelationship = "amended and accepted; run grd sync"
+			if state.ConflictID == "" {
+				parentRelationship = "amended and accepted; run grd sync"
+				break
+			}
+			conflict, err := client.awaitingReconciliationConflict(ctx, workdir, origin, state, change.LatestVersion.ID, head)
+			if err != nil {
+				return err
+			}
+			parentRelationship = "amended and accepted"
+			pendingReconciliation = &conflict
 		}
 	}
 	if !found {
@@ -249,6 +259,15 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 	fmt.Fprintf(client.Stdout, "  %s — %s\n", state.ParentTitle, parentRelationship)
 	if pendingAmendmentRationale != "" {
 		fmt.Fprintf(client.Stdout, "Repository amendment: %s\n", pendingAmendmentRationale)
+	}
+	if pendingReconciliation != nil {
+		fmt.Fprintf(client.Stdout, "Reconciliation: %s — awaiting judgement\n", pendingReconciliation.ID)
+		if len(pendingReconciliation.AffectedPaths) > 0 {
+			fmt.Fprintln(client.Stdout, "Affected:")
+			for _, path := range pendingReconciliation.AffectedPaths {
+				fmt.Fprintf(client.Stdout, "  %s\n", path)
+			}
+		}
 	}
 	return nil
 }

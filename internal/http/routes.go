@@ -6,23 +6,25 @@ import (
 )
 
 type Handlers struct {
-	AgentDocs       http.Handler
-	Healthz         http.Handler
-	CreateRepo      http.Handler
-	GetRepo         http.Handler
-	ArchiveRepo     http.Handler
-	CreateRepoToken http.Handler
-	ListRepoTokens  http.Handler
-	RevokeRepoToken http.Handler
-	CurrentIntent   http.Handler
-	BootstrapIntent http.Handler
-	AdmitProposal   http.Handler
-	GetChange       http.Handler
-	ListVersions    http.Handler
-	GitSmartHTTP    http.Handler
-	GitLFS          http.Handler
-	GitShowDiff     http.Handler
-	GitCompareDiff  http.Handler
+	AgentDocs                    http.Handler
+	Healthz                      http.Handler
+	CreateRepo                   http.Handler
+	GetRepo                      http.Handler
+	ArchiveRepo                  http.Handler
+	CreateRepoToken              http.Handler
+	ListRepoTokens               http.Handler
+	RevokeRepoToken              http.Handler
+	CurrentIntent                http.Handler
+	BootstrapIntent              http.Handler
+	AdmitProposal                http.Handler
+	RecordReconciliationConflict http.Handler
+	GetReconciliationConflict    http.Handler
+	GetChange                    http.Handler
+	ListVersions                 http.Handler
+	GitSmartHTTP                 http.Handler
+	GitLFS                       http.Handler
+	GitShowDiff                  http.Handler
+	GitCompareDiff               http.Handler
 }
 
 func NewMux(h Handlers) *http.ServeMux {
@@ -54,11 +56,15 @@ func NewMux(h Handlers) *http.ServeMux {
 
 	currentIntent := handlerOrNotFound(h.CurrentIntent)
 	admitProposal := handlerOrNotFound(h.AdmitProposal)
+	recordReconciliationConflict := handlerOrNotFound(h.RecordReconciliationConflict)
+	getReconciliationConflict := handlerOrNotFound(h.GetReconciliationConflict)
 	getChange := handlerOrNotFound(h.GetChange)
 	listVersions := handlerOrNotFound(h.ListVersions)
 	mux.Handle("GET /v1/repos/{repoID}/intent", currentIntent)
 	mux.Handle("PUT /v1/repos/{repoID}/intent", handlerOrNotFound(h.BootstrapIntent))
 	mux.Handle("POST /v1/repos/{repoID}/proposals", admitProposal)
+	mux.Handle("POST /v1/repos/{repoID}/reconciliation-conflicts", recordReconciliationConflict)
+	mux.Handle("GET /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}", getReconciliationConflict)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}", getChange)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}/versions", listVersions)
 

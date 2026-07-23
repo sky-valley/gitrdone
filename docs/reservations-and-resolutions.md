@@ -636,7 +636,7 @@ When a prepared promotion is found, gitrdone reads the actual trunk projection:
 
 - If trunk is A, retry the compare-and-swap to B and complete the promotion.
 - If trunk is B, the projection already succeeded; complete the promotion without moving trunk again.
-- If trunk is C, do not overwrite it. Keep the prepared promotion durable and expose a structured reconciliation conflict containing expected A, target B, and actual C.
+- If trunk is C, do not overwrite it. Keep the prepared promotion durable and expose a structured projection conflict containing expected A, target B, and actual C.
 
 C does not discard the proposal. It means the exact A → B operation can no longer be completed automatically. A later judgement process may establish what C represents, derive B' by replaying the proposed change onto accepted C, and prepare a new C → B' promotion.
 
@@ -660,7 +660,7 @@ The ledger's current intent advances only when promotion completion is durable. 
 
 The first native API could accidentally make today's approve-all implementation part of the permanent contract by treating `POST /proposals` as “judgement finished and promotion succeeded.” Real judgement will often be asynchronous: it may run tools, amend the proposal, wait for a simulator, or require human attention.
 
-Combining admission and final outcome would force a breaking API change as soon as judgement becomes real. Mixing reconciliation conflicts into the current-intent response would likewise confuse accepted repository content with operational projection state.
+Combining admission and final outcome would force a breaking API change as soon as judgement becomes real. Mixing projection conflicts into the current-intent response would likewise confuse accepted repository content with operational projection state.
 
 ### Resolution
 
@@ -693,7 +693,7 @@ Producer provenance is assigned by the authenticated service boundary, not accep
 This resolution does not yet settle:
 
 - the judgement-process read API and event stream;
-- repository operational status and reconciliation-conflict endpoints;
+- repository operational status and projection-conflict endpoints;
 - asynchronous retry and wake-up mechanics after admission;
 - actor identity beyond the current control API authority;
 - native API authorization distinct from the shared control token;
@@ -824,18 +824,22 @@ Those names would make the temporary Git adapter and approve-all coordinator har
 
 ### Resolution
 
-The stable native repository API remains:
+The stable native repository API is:
 
 ```text
 GET  /v1/repos/{repoID}/intent
 POST /v1/repos/{repoID}/proposals
 GET  /v1/repos/{repoID}/changes/{changeID}
 GET  /v1/repos/{repoID}/changes/{changeID}/versions
+POST /v1/repos/{repoID}/reconciliation-conflicts
+GET  /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}
 ```
 
 Root-intent `PUT` is an administrative bootstrap exception. Git smart HTTP, LFS, candidate refs, and Git diff endpoints are adapter surfaces. Documentation must list these three surfaces separately.
 
 Repository amendment remains an internal judgement operation. The executable J3 proof reaches it through an in-process test seam, not a production HTTP route. Change inspection exposes `latestAmendment` and `latestPromotion`; immutable version history remains the complete record.
+
+Recording a reconciliation conflict is different from commanding judgement. It is an authenticated adapter report that an existing immutable descendant Version C could not be replayed from original B onto the still-current accepted amendment B′. C is admitted first through the ordinary proposal boundary, so the conflict preserves rather than manufactures its Change/Version identity. The repository assigns only the durable Conflict identity and records the authenticated reporter separately from C's author; subsequent judgement remains internal.
 
 The current judgement seam is deliberately narrow: a `PromotionDecider` receives a `JudgementSubject` containing one change and one immutable version, then returns `PromoteNow` or `DeferPromotion`. This does not claim to model the eventual plans, tools, tests, amendments, human reviews, or multi-step judgement process.
 
@@ -848,3 +852,38 @@ Promotion and amendment are mutually exclusive terminal transitions for one vers
 ### Agreed ownership rule
 
 > Public contracts name durable repository facts. Judgement commands and adapter plumbing stay replaceable until their product shape is earned.
+
+## Resolution 012: reconciliation conflicts are durable judgement work, not a Git error format
+
+**Status:** Agreed and implemented for J3.2
+
+### Reservation
+
+The thin Git client can detect a failed rebase, but persisting only an error string or conflict markers would fake the central promise that conflicts become durable inputs to judgement. Building a custom merge algebra, conflicted-tree format, or descendant-rebase engine would also recreate capabilities deliberately delegated to jj-core.
+
+### Resolution
+
+When local successor C cannot be replayed from submitted B onto accepted amendment B′:
+
+- the client creates a recovery ref and restores the clean workspace at C;
+- C is published and admitted through the ordinary proposal boundary as an immutable Version of a newly identified Change;
+- the repository records one idempotent `ReconciliationConflict` linking B, B′, and C;
+- the record is accepted only while B′ still produces current Intent, serialized against promotion;
+- `reportedBy` preserves the authenticated authority that asserted the replay failure;
+- affected Git paths are optional, bounded diagnostics, not the authoritative representation of the conflict;
+- accepted Intent and canonical trunk remain at B′;
+- `grd status` reads the durable conflict and reports that judgement is pending.
+
+The record has no mutable workflow enum and no resolution command. Its current existence means that reconciliation awaits judgement. The explicit conflict lineage records that C was derived from B; it does not misuse promotion dependencies for provenance. This avoids permanently making C depend on a superseded version that can never promote.
+
+The existing crash-recovery object for an unexpected trunk value is named `ProjectionConflict`. It is operational promotion state and is not interchangeable with a content reconciliation conflict.
+
+### jj boundary
+
+The judgement identity and audit record remain valid when jj-core becomes the engine. B and B′ map to evolving commit versions of one stable change; C remains a separate change. jj-core will perform the rebase and may produce a first-class conflicted C′ Version of that same C Change. That future Version can carry a `jj` content reference while this conflict continues to explain why it exists and what judgement governs it.
+
+The current Git adapter may report that replay failed and provide affected paths. It must not implement a custom conflict snapshot, merge algorithm, marker format, resolution engine, or automatic descendant-rebase system.
+
+### Agreed ownership rule
+
+> The repository owns durable conflict identity and judgement lifecycle; the embedded VCS engine owns reconciliation and conflicted content representation.

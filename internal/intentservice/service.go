@@ -19,6 +19,8 @@ type Repository interface {
 	Promote(ctx context.Context, request intent.PromoteRequest) (intent.Promoted, error)
 	Promotion(ctx context.Context, versionID intent.VersionID) (intent.Promoted, bool, error)
 	ReadyDependents(ctx context.Context) ([]intent.Proposed, error)
+	RecordReconciliationConflict(ctx context.Context, request intent.ReconciliationConflictRequest) (intent.ReconciliationConflict, error)
+	ReconciliationConflict(ctx context.Context, id intent.ConflictID) (intent.ReconciliationConflict, bool, error)
 	InspectChange(ctx context.Context, id intent.ChangeID) (intent.ChangeInspection, error)
 	Versions(ctx context.Context, query intent.VersionQuery) (intent.VersionPage, error)
 }
@@ -75,6 +77,15 @@ type AmendmentRequest struct {
 type AmendmentReceipt struct {
 	Amended   intent.Amended
 	Promotion *intent.Promoted
+}
+
+type ReconciliationConflictRequest struct {
+	IdempotencyKey    string
+	FromVersion       intent.VersionID
+	ToVersion         intent.VersionID
+	DescendantVersion intent.VersionID
+	ReportedBy        string
+	AffectedPaths     []string
 }
 
 type Service struct {
@@ -182,6 +193,36 @@ func (service *Service) InspectChange(ctx context.Context, repoID string, change
 		return intent.ChangeInspection{}, err
 	}
 	return repository.InspectChange(ctx, changeID)
+}
+
+func (service *Service) RecordReconciliationConflict(ctx context.Context, repoID string, request ReconciliationConflictRequest) (intent.ReconciliationConflict, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.ReconciliationConflict{}, err
+	}
+	return repository.RecordReconciliationConflict(ctx, intent.ReconciliationConflictRequest{
+		IdempotencyKey:    request.IdempotencyKey,
+		FromVersion:       request.FromVersion,
+		ToVersion:         request.ToVersion,
+		DescendantVersion: request.DescendantVersion,
+		ReportedBy:        strings.TrimSpace(request.ReportedBy),
+		AffectedPaths:     request.AffectedPaths,
+	})
+}
+
+func (service *Service) ReconciliationConflict(ctx context.Context, repoID string, conflictID intent.ConflictID) (intent.ReconciliationConflict, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.ReconciliationConflict{}, err
+	}
+	conflict, found, err := repository.ReconciliationConflict(ctx, conflictID)
+	if err != nil {
+		return intent.ReconciliationConflict{}, err
+	}
+	if !found {
+		return intent.ReconciliationConflict{}, intent.ErrReconciliationConflictNotFound
+	}
+	return conflict, nil
 }
 
 func (service *Service) Versions(ctx context.Context, repoID string, query intent.VersionQuery) (intent.VersionPage, error) {

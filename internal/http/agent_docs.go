@@ -96,6 +96,8 @@ A successful proposal response means the change version was durably admitted. Th
 
 Inspect the durable identity with GET /v1/repos/{repoID}/changes/{changeID}. The summary reports latestAmendment and latestPromotion only when those outcomes exist. Read immutable versions with GET /v1/repos/{repoID}/changes/{changeID}/versions. The versions endpoint accepts limit from 1 to 100 and an opaque cursor returned by the previous page. Repository amendment is an internal judgement operation, not a public HTTP command.
 
+If an authenticated adapter cannot replay descendant C from submitted B onto the still-current accepted amendment B-prime, first admit C through the ordinary proposal boundary, then record that existing descendant version as judgement work with POST /v1/repos/{repoID}/reconciliation-conflicts. Inspect it with GET /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}. The POST requires Idempotency-Key, and the durable reportedBy field comes from authenticated authority rather than request JSON. Affected paths are optional, bounded diagnostics from the adapter; they are not the repository's content-conflict representation.
+
 ## Reliable token creation
 
 For POST /v1/repos/{repoID}/tokens, include Idempotency-Key when retrying or when the request is part of a durable workflow.
@@ -150,6 +152,8 @@ Native repository API:
 - POST /v1/repos/{repoID}/proposals
 - GET /v1/repos/{repoID}/changes/{changeID}
 - GET /v1/repos/{repoID}/changes/{changeID}/versions
+- POST /v1/repos/{repoID}/reconciliation-conflicts
+- GET /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}
 
 Git smart HTTP adapter for normal Git clients:
 
@@ -206,13 +210,13 @@ repoID is the external control ID, for example repo_00000000-0000-4000-8000-0000
 
 > gitrdone is a repository service where proposed changes become accepted intent through judgement, with Git smart HTTP and Git LFS compatibility.
 
-gitrdone's native API exposes accepted intent, durable changes, and immutable change versions. Use canonical repo IDs, not namespace/name, as repository identity. Public discovery files are safe to scrape. Control, Git, and Git LFS operations require the appropriate tokens.
+gitrdone's native API exposes accepted intent, durable changes, immutable change versions, and durable reconciliation conflicts awaiting judgement. Use canonical repo IDs, not namespace/name, as repository identity. Public discovery files are safe to scrape. Control, Git, and Git LFS operations require the appropriate tokens.
 
 For retriable automation, include Idempotency-Key on token creation and derive it from the stable logical operation.
 
 List and revoke repo tokens with the control bearer token; token values are returned only at creation.
 
-Idempotency-Key is required on POST /v1/repos/{repoID}/proposals. A successful proposal response means the change version was durably admitted. Promotion may already be included, but is not part of the admission guarantee.
+Idempotency-Key is required on POST /v1/repos/{repoID}/proposals and POST /v1/repos/{repoID}/reconciliation-conflicts. A successful proposal response means the change version was durably admitted. Promotion may already be included, but is not part of the admission guarantee.
 
 ## Agent Docs
 
@@ -236,6 +240,8 @@ Idempotency-Key is required on POST /v1/repos/{repoID}/proposals. A successful p
 - [Admit proposal](%[1]s/v1/repos/{repoID}/proposals): POST a base intent and immutable content reference with a write/readwrite repo token or the control bearer and Idempotency-Key.
 - [Inspect change](%[1]s/v1/repos/{repoID}/changes/{changeID}): GET the durable change identity, latest version, and latest amendment or promotion outcomes when present.
 - [List change versions](%[1]s/v1/repos/{repoID}/changes/{changeID}/versions): GET bounded immutable version history with cursor pagination.
+- [Record reconciliation conflict](%[1]s/v1/repos/{repoID}/reconciliation-conflicts): POST B, B-prime, and an existing admitted descendant version C with a write/readwrite repo token or the control bearer and Idempotency-Key.
+- [Inspect reconciliation conflict](%[1]s/v1/repos/{repoID}/reconciliation-conflicts/{conflictID}): GET durable judgement work and its bounded affected-path diagnostics.
 
 ## Git Adapter API Surface
 

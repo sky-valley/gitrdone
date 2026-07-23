@@ -47,6 +47,7 @@ type changeResponse struct {
 	ID            string `json:"id"`
 	LatestVersion struct {
 		ID         string `json:"id"`
+		BaseIntent string `json:"baseIntent"`
 		ContentRef struct {
 			Engine   string `json:"engine"`
 			Revision string `json:"revision"`
@@ -61,6 +62,29 @@ type changeResponse struct {
 		ToIntent string `json:"toIntent"`
 		Version  string `json:"version"`
 	} `json:"latestPromotion"`
+}
+
+type reconciliationConflictResponse struct {
+	ID     string `json:"id"`
+	State  string `json:"state"`
+	Change struct {
+		ID string `json:"id"`
+	} `json:"change"`
+	Version struct {
+		ID           string   `json:"id"`
+		Change       string   `json:"change"`
+		BaseIntent   string   `json:"baseIntent"`
+		Producer     string   `json:"producer"`
+		Dependencies []string `json:"dependencies"`
+		ContentRef   struct {
+			Engine   string `json:"engine"`
+			Revision string `json:"revision"`
+		} `json:"contentRef"`
+	} `json:"version"`
+	FromVersion   string   `json:"fromVersion"`
+	ToVersion     string   `json:"toVersion"`
+	ReportedBy    string   `json:"reportedBy"`
+	AffectedPaths []string `json:"affectedPaths"`
 }
 
 func requireAncestor(ctx context.Context, workdir string, base string, head string) error {
@@ -201,6 +225,48 @@ func (client Client) propose(ctx context.Context, remote remote, baseIntent stri
 		return proposalResponse{}, fmt.Errorf("propose content: %w", err)
 	}
 	return receipt, nil
+}
+
+func (client Client) recordReconciliationConflict(
+	ctx context.Context,
+	remote remote,
+	fromVersion string,
+	toVersion string,
+	descendantVersion string,
+	affectedPaths []string,
+) (reconciliationConflictResponse, error) {
+	body := map[string]any{
+		"fromVersion":       fromVersion,
+		"toVersion":         toVersion,
+		"descendantVersion": descendantVersion,
+	}
+	if len(affectedPaths) > 0 {
+		body["affectedPaths"] = affectedPaths
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return reconciliationConflictResponse{}, fmt.Errorf("encode reconciliation conflict: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, remote.baseURL+"/v1/repos/"+remote.repoID+"/reconciliation-conflicts", bytes.NewReader(encoded))
+	if err != nil {
+		return reconciliationConflictResponse{}, fmt.Errorf("create reconciliation conflict request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", reconciliationConflictIdempotencyKey(remote.repoID, fromVersion, toVersion, descendantVersion))
+	request.SetBasicAuth(remote.username, remote.password)
+	var conflict reconciliationConflictResponse
+	if err := client.doJSON(request, &conflict); err != nil {
+		return reconciliationConflictResponse{}, fmt.Errorf("record reconciliation conflict: %w", err)
+	}
+	return conflict, nil
+}
+
+func (client Client) reconciliationConflict(ctx context.Context, remote remote, conflictID string) (reconciliationConflictResponse, error) {
+	var conflict reconciliationConflictResponse
+	if err := client.getJSON(ctx, remote, "/v1/repos/"+remote.repoID+"/reconciliation-conflicts/"+conflictID, &conflict); err != nil {
+		return reconciliationConflictResponse{}, fmt.Errorf("inspect reconciliation conflict: %w", err)
+	}
+	return conflict, nil
 }
 
 func (client Client) getJSON(ctx context.Context, remote remote, path string, target any) error {
