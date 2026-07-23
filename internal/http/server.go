@@ -71,6 +71,7 @@ func buildServer(config Config, repos repoStore, idempotency idempotencyDoer, gi
 		BootstrapIntent:              control(intentHandlers.Bootstrap),
 		AdmitProposal:                repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityPropose, intentHandlers.AdmitProposal),
 		RecordReconciliationConflict: repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityPropose, intentHandlers.RecordReconciliationConflict),
+		ListReconciliationConflicts:  repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.ListReconciliationConflicts),
 		GetReconciliationConflict:    repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.GetReconciliationConflict),
 		GetChange:                    repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.GetChange),
 		ListVersions:                 repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.ListVersions),

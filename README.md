@@ -169,12 +169,15 @@ POST /v1/repos/{repoID}/proposals
 GET  /v1/repos/{repoID}/changes/{changeID}
 GET  /v1/repos/{repoID}/changes/{changeID}/versions
 POST /v1/repos/{repoID}/reconciliation-conflicts
+GET  /v1/repos/{repoID}/reconciliation-conflicts
 GET  /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}
 ```
 
 Repository amendment is an internal judgement operation, not a public command. Change inspection exposes `latestAmendment` and `latestPromotion` when those outcomes exist; the bounded versions collection preserves the immutable history.
 
 A reconciliation-conflict POST records the authenticated observation that an already-admitted descendant version C could not be replayed from submitted B onto the still-current accepted amendment B′. It preserves C's existing Change/Version identity, records the authenticated reporter as `reportedBy`, and returns a durable conflict in `awaiting_judgement` state. Affected paths are optional, bounded adapter diagnostics, not a replacement for jj-core's future conflicted-content representation.
+
+The conflict collection GET returns durable conflicts oldest-first with bounded `limit` and opaque `cursor` pagination. This is repository history, not a separately persisted worker queue; `awaiting_judgement` remains a derived state.
 
 ## grd client
 

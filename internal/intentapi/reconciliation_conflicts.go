@@ -3,11 +3,14 @@ package intentapi
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/sky-valley/gitrdone/internal/intent"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
 )
+
+const defaultReconciliationConflictPageSize = 50
 
 type reconciliationConflictResponse struct {
 	ID            string                 `json:"id"`
@@ -82,6 +85,60 @@ func getReconciliationConflictHandler(service *intentservice.Service) http.Handl
 		}
 		writeJSON(w, http.StatusOK, mapReconciliationConflict(conflict))
 	})
+}
+
+func listReconciliationConflictsHandler(service *intentservice.Service) http.Handler {
+	type responseBody struct {
+		Conflicts  []reconciliationConflictResponse `json:"conflicts"`
+		NextCursor string                           `json:"nextCursor,omitempty"`
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limit, err := reconciliationConflictPageLimit(r.URL.Query().Get("limit"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		repoID, ok := repositoryID(w, r)
+		if !ok {
+			return
+		}
+		page, err := service.ReconciliationConflicts(r.Context(), repoID, intent.ReconciliationConflictQuery{
+			After: intent.ConflictID(strings.TrimSpace(r.URL.Query().Get("cursor"))),
+			Limit: limit,
+		})
+		switch {
+		case err == nil:
+		case errors.Is(err, intentservice.ErrRepositoryNotFound):
+			writeError(w, http.StatusNotFound, "repository not found")
+			return
+		case errors.Is(err, intent.ErrReconciliationConflictNotFound):
+			writeError(w, http.StatusBadRequest, "reconciliation conflict cursor is invalid")
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, "reconciliation conflicts could not be loaded")
+			return
+		}
+		response := responseBody{
+			Conflicts:  make([]reconciliationConflictResponse, 0, len(page.Conflicts)),
+			NextCursor: string(page.NextCursor),
+		}
+		for _, conflict := range page.Conflicts {
+			response.Conflicts = append(response.Conflicts, mapReconciliationConflict(conflict))
+		}
+		writeJSON(w, http.StatusOK, response)
+	})
+}
+
+func reconciliationConflictPageLimit(raw string) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return defaultReconciliationConflictPageSize, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 || limit > 100 {
+		return 0, errors.New("limit must be an integer between 1 and 100")
+	}
+	return limit, nil
 }
 
 func writeReconciliationConflictError(w http.ResponseWriter, err error) bool {

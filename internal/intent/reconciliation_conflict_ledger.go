@@ -13,6 +13,30 @@ func (ledger *transientLedger) ReconciliationConflict(_ context.Context, id Conf
 	return cloneReconciliationConflict(conflict), found, nil
 }
 
+func (ledger *transientLedger) ReconciliationConflicts(_ context.Context, after ConflictID, limit int) ([]ReconciliationConflict, bool, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	start := 0
+	if after != "" {
+		start = -1
+		for index, id := range ledger.conflictIDs {
+			if id == after {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, false, ErrReconciliationConflictNotFound
+		}
+	}
+	end := min(start+limit, len(ledger.conflictIDs))
+	conflicts := make([]ReconciliationConflict, 0, end-start)
+	for _, id := range ledger.conflictIDs[start:end] {
+		conflicts = append(conflicts, cloneReconciliationConflict(ledger.conflicts[id]))
+	}
+	return conflicts, end < len(ledger.conflictIDs), nil
+}
+
 func (ledger *transientLedger) ReconciliationConflictByIdempotencyKey(_ context.Context, key string) (ReconciliationConflict, bool, error) {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
@@ -50,6 +74,7 @@ func (ledger *transientLedger) RecordReconciliationConflict(_ context.Context, k
 		return err
 	}
 	ledger.conflicts[conflict.ID] = cloneReconciliationConflict(conflict)
+	ledger.conflictIDs = append(ledger.conflictIDs, conflict.ID)
 	ledger.idempotency[key] = transientIdempotencyRecord{
 		operation:  transientReconciliationConflictOperation,
 		versionID:  conflict.Version.ID,

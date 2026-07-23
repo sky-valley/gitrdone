@@ -212,6 +212,119 @@ func TestRepositoryReconciliationConflictRequiresAcceptedAmendmentLineage(t *tes
 	}
 }
 
+func TestRepositoryListsReconciliationConflictsInDurableRecordingOrder(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, statelessAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	initial := repository.CurrentIntent()
+	original, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-b",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose B: %v", err)
+	}
+	amended, err := repository.Amend(ctx, intent.AmendRequest{
+		IdempotencyKey:  "amend-b",
+		ChangeID:        original.Change.ID,
+		ExpectedVersion: original.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "b2b2b2b2"},
+		Producer:        "repository-agent",
+		Rationale:       "repair B",
+	})
+	if err != nil {
+		t.Fatalf("amend B: %v", err)
+	}
+	if _, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      amended.Version.ID,
+		ExpectedIntent: initial.ID,
+	}); err != nil {
+		t.Fatalf("promote B prime: %v", err)
+	}
+	empty, err := repository.ReconciliationConflicts(ctx, intent.ReconciliationConflictQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("list empty conflict history: %v", err)
+	}
+	if len(empty.Conflicts) != 0 || empty.NextCursor != "" {
+		t.Fatalf("empty conflict history = %#v, want empty page", empty)
+	}
+	if _, err := repository.ReconciliationConflicts(ctx, intent.ReconciliationConflictQuery{}); err == nil {
+		t.Fatal("listed conflicts with an invalid zero page limit")
+	}
+
+	recorded := make([]intent.ReconciliationConflict, 0, 2)
+	for index, revision := range []string{"cccccccc", "dddddddd"} {
+		descendant, err := repository.Propose(ctx, intent.Proposal{
+			IdempotencyKey: "proposal-descendant-" + revision,
+			BaseIntent:     initial.ID,
+			Content:        intent.ContentRef{Engine: "git", Revision: revision},
+			Producer:       "ion",
+		})
+		if err != nil {
+			t.Fatalf("propose descendant %d: %v", index, err)
+		}
+		conflict, err := repository.RecordReconciliationConflict(ctx, intent.ReconciliationConflictRequest{
+			IdempotencyKey:    "conflict-" + revision,
+			FromVersion:       original.Version.ID,
+			ToVersion:         amended.Version.ID,
+			DescendantVersion: descendant.Version.ID,
+			ReportedBy:        "ion",
+			AffectedPaths:     []string{revision + ".txt"},
+		})
+		if err != nil {
+			t.Fatalf("record conflict %d: %v", index, err)
+		}
+		recorded = append(recorded, conflict)
+	}
+	if _, err := repository.RecordReconciliationConflict(ctx, intent.ReconciliationConflictRequest{
+		IdempotencyKey:    "conflict-cccccccc",
+		FromVersion:       original.Version.ID,
+		ToVersion:         amended.Version.ID,
+		DescendantVersion: recorded[0].Version.ID,
+		ReportedBy:        "ion",
+	}); err != nil {
+		t.Fatalf("retry first conflict: %v", err)
+	}
+
+	first, err := repository.ReconciliationConflicts(ctx, intent.ReconciliationConflictQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first conflict page: %v", err)
+	}
+	if len(first.Conflicts) != 1 || !reflect.DeepEqual(first.Conflicts[0], recorded[0]) || first.NextCursor != recorded[0].ID {
+		t.Fatalf("first page = %#v, want first conflict and cursor %q", first, recorded[0].ID)
+	}
+	first.Conflicts[0].AffectedPaths[0] = "corrupted-by-caller"
+
+	second, err := repository.ReconciliationConflicts(ctx, intent.ReconciliationConflictQuery{
+		After: first.NextCursor,
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("list second conflict page: %v", err)
+	}
+	if len(second.Conflicts) != 1 || !reflect.DeepEqual(second.Conflicts[0], recorded[1]) || second.NextCursor != "" {
+		t.Fatalf("second page = %#v, want second conflict and no cursor", second)
+	}
+	reloaded, err := repository.ReconciliationConflicts(ctx, intent.ReconciliationConflictQuery{Limit: 2})
+	if err != nil {
+		t.Fatalf("reload conflict history: %v", err)
+	}
+	if !reflect.DeepEqual(reloaded.Conflicts, recorded) {
+		t.Fatalf("reloaded conflicts = %#v, want defensive copies %#v", reloaded.Conflicts, recorded)
+	}
+	if _, err := repository.ReconciliationConflicts(ctx, intent.ReconciliationConflictQuery{
+		After: "conflict_unknown",
+		Limit: 1,
+	}); !errors.Is(err, intent.ErrReconciliationConflictNotFound) {
+		t.Fatalf("invalid cursor error = %v, want ErrReconciliationConflictNotFound", err)
+	}
+}
+
 func TestReconciliationConflictPathsPreserveGitNamesWithinOneBoundedContract(t *testing.T) {
 	got, err := intent.NormalizeReconciliationConflictPaths([]string{" trailing ", "leading ", " trailing "})
 	if err != nil {

@@ -32,6 +32,7 @@ type journalState struct {
 	completed   map[intent.VersionID]intent.PromotionID
 	byIntent    map[intent.RevisionID]intent.PromotionID
 	conflicts   map[intent.ConflictID]intent.ReconciliationConflict
+	conflictIDs []intent.ConflictID
 	idempotency map[string]idempotencyRecord
 }
 
@@ -432,6 +433,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
 			conflict := cloneReconciliationConflict(*record.ReconciliationConflict)
 			state.conflicts[conflict.ID] = conflict
+			state.conflictIDs = append(state.conflictIDs, conflict.ID)
 			state.idempotency[record.IdempotencyKey] = idempotencyRecord{
 				operation:  reconciliationConflictOperation,
 				versionID:  conflict.Version.ID,

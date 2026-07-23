@@ -832,6 +832,7 @@ POST /v1/repos/{repoID}/proposals
 GET  /v1/repos/{repoID}/changes/{changeID}
 GET  /v1/repos/{repoID}/changes/{changeID}/versions
 POST /v1/repos/{repoID}/reconciliation-conflicts
+GET  /v1/repos/{repoID}/reconciliation-conflicts
 GET  /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}
 ```
 
@@ -875,6 +876,8 @@ When local successor C cannot be replayed from submitted B onto accepted amendme
 - `grd status` reads the durable conflict and reports that judgement is pending.
 
 The record has no mutable workflow enum and no resolution command. Its current existence means that reconciliation awaits judgement. The explicit conflict lineage records that C was derived from B; it does not misuse promotion dependencies for provenance. This avoids permanently making C depend on a superseded version that can never promote.
+
+Conflict discovery is an oldest-first, cursor-paginated read over durable repository history. The ledger privately indexes conflict IDs in recording order and reconstructs that index from journal events after restart. This is not a second queue or lifecycle authority. When resolution events exist, the read model may derive a different state without rewriting the conflict record.
 
 The existing crash-recovery object for an unexpected trunk value is named `ProjectionConflict`. It is operational promotion state and is not interchangeable with a content reconciliation conflict.
 

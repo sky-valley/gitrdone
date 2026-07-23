@@ -18,6 +18,7 @@ type Handlers struct {
 	BootstrapIntent              http.Handler
 	AdmitProposal                http.Handler
 	RecordReconciliationConflict http.Handler
+	ListReconciliationConflicts  http.Handler
 	GetReconciliationConflict    http.Handler
 	GetChange                    http.Handler
 	ListVersions                 http.Handler
@@ -57,6 +58,7 @@ func NewMux(h Handlers) *http.ServeMux {
 	currentIntent := handlerOrNotFound(h.CurrentIntent)
 	admitProposal := handlerOrNotFound(h.AdmitProposal)
 	recordReconciliationConflict := handlerOrNotFound(h.RecordReconciliationConflict)
+	listReconciliationConflicts := handlerOrNotFound(h.ListReconciliationConflicts)
 	getReconciliationConflict := handlerOrNotFound(h.GetReconciliationConflict)
 	getChange := handlerOrNotFound(h.GetChange)
 	listVersions := handlerOrNotFound(h.ListVersions)
@@ -64,6 +66,7 @@ func NewMux(h Handlers) *http.ServeMux {
 	mux.Handle("PUT /v1/repos/{repoID}/intent", handlerOrNotFound(h.BootstrapIntent))
 	mux.Handle("POST /v1/repos/{repoID}/proposals", admitProposal)
 	mux.Handle("POST /v1/repos/{repoID}/reconciliation-conflicts", recordReconciliationConflict)
+	mux.Handle("GET /v1/repos/{repoID}/reconciliation-conflicts", listReconciliationConflicts)
 	mux.Handle("GET /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}", getReconciliationConflict)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}", getChange)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}/versions", listVersions)

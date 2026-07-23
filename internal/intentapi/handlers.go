@@ -21,6 +21,7 @@ type Handlers struct {
 	Bootstrap                    http.Handler
 	AdmitProposal                http.Handler
 	RecordReconciliationConflict http.Handler
+	ListReconciliationConflicts  http.Handler
 	GetReconciliationConflict    http.Handler
 	GetChange                    http.Handler
 	ListVersions                 http.Handler
@@ -32,6 +33,7 @@ func NewHandlers(service *intentservice.Service) Handlers {
 		Bootstrap:                    bootstrapHandler(service),
 		AdmitProposal:                admitProposalHandler(service),
 		RecordReconciliationConflict: recordReconciliationConflictHandler(service),
+		ListReconciliationConflicts:  listReconciliationConflictsHandler(service),
 		GetReconciliationConflict:    getReconciliationConflictHandler(service),
 		GetChange:                    getChangeHandler(service),
 		ListVersions:                 listVersionsHandler(service),

@@ -75,6 +75,25 @@ func TestLedgerRestoresReconciliationConflictIdentityAndIdempotency(t *testing.T
 	if err != nil {
 		t.Fatalf("record conflict: %v", err)
 	}
+	secondDescendant, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-d",
+		BaseIntent:     original.Version.BaseIntent,
+		Content:        intent.ContentRef{Engine: "git", Revision: "dddddddd"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose D: %v", err)
+	}
+	secondRecorded, err := repository.RecordReconciliationConflict(ctx, intent.ReconciliationConflictRequest{
+		IdempotencyKey:    "conflict-b-d",
+		FromVersion:       original.Version.ID,
+		ToVersion:         amended.Version.ID,
+		DescendantVersion: secondDescendant.Version.ID,
+		ReportedBy:        "ion",
+	})
+	if err != nil {
+		t.Fatalf("record second conflict: %v", err)
+	}
 	if err := ledger.Close(); err != nil {
 		t.Fatalf("close ledger: %v", err)
 	}
@@ -123,6 +142,23 @@ func TestLedgerRestoresReconciliationConflictIdentityAndIdempotency(t *testing.T
 	}
 	if !reflect.DeepEqual(loaded, recorded) {
 		t.Fatalf("restored conflict = %#v, want %#v", loaded, recorded)
+	}
+	firstPage, err := restarted.ReconciliationConflicts(ctx, intent.ReconciliationConflictQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first restored conflict page: %v", err)
+	}
+	if len(firstPage.Conflicts) != 1 || !reflect.DeepEqual(firstPage.Conflicts[0], recorded) || firstPage.NextCursor != recorded.ID {
+		t.Fatalf("first restored page = %#v, want first conflict and cursor %q", firstPage, recorded.ID)
+	}
+	secondPage, err := restarted.ReconciliationConflicts(ctx, intent.ReconciliationConflictQuery{
+		After: firstPage.NextCursor,
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("list second restored conflict page: %v", err)
+	}
+	if len(secondPage.Conflicts) != 1 || !reflect.DeepEqual(secondPage.Conflicts[0], secondRecorded) || secondPage.NextCursor != "" {
+		t.Fatalf("second restored page = %#v, want second conflict and no cursor", secondPage)
 	}
 	retried, err := restarted.RecordReconciliationConflict(ctx, request)
 	if err != nil {

@@ -63,6 +63,12 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 			wantRepoID: "repo_123",
 		},
 		{
+			name:       "list reconciliation conflicts",
+			method:     http.MethodGet,
+			target:     "/v1/repos/repo_123/reconciliation-conflicts",
+			wantRepoID: "repo_123",
+		},
+		{
 			name:       "get reconciliation conflict",
 			method:     http.MethodGet,
 			target:     "/v1/repos/repo_123/reconciliation-conflicts/conflict_abc",
@@ -114,6 +120,7 @@ func TestControlRoutesUseCanonicalRepoID(t *testing.T) {
 				BootstrapIntent:              handler,
 				AdmitProposal:                handler,
 				RecordReconciliationConflict: handler,
+				ListReconciliationConflicts:  handler,
 				GetReconciliationConflict:    handler,
 				GetChange:                    handler,
 				ListVersions:                 handler,

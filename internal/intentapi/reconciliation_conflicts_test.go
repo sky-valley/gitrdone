@@ -125,6 +125,72 @@ func TestNativeIntentAPIRecordsAndReadsReconciliationConflict(t *testing.T) {
 	if !reconciliationConflictResponsesEqual(retried, recorded) {
 		t.Fatalf("retried conflict = %#v, want %#v", retried, recorded)
 	}
+
+	secondDescendant, err := repository.Propose(context.Background(), intent.Proposal{
+		IdempotencyKey: "proposal-d",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "dddddddd"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose D: %v", err)
+	}
+	secondRecorded, err := repository.RecordReconciliationConflict(context.Background(), intent.ReconciliationConflictRequest{
+		IdempotencyKey:    "conflict-b-d",
+		FromVersion:       original.Version.ID,
+		ToVersion:         amended.Version.ID,
+		DescendantVersion: secondDescendant.Version.ID,
+		ReportedBy:        "ion",
+	})
+	if err != nil {
+		t.Fatalf("record second conflict: %v", err)
+	}
+
+	listFirst := httptest.NewRequest(http.MethodGet, "/v1/repos/repo_123/reconciliation-conflicts?limit=1", nil)
+	listFirst.SetPathValue("repoID", "repo_123")
+	listFirstRecorder := httptest.NewRecorder()
+	handlers.ListReconciliationConflicts.ServeHTTP(listFirstRecorder, listFirst)
+	if listFirstRecorder.Code != http.StatusOK {
+		t.Fatalf("list first page status = %d, want 200: %s", listFirstRecorder.Code, listFirstRecorder.Body.String())
+	}
+	var firstPage reconciliationConflictPageResponse
+	decodeResponse(t, listFirstRecorder, &firstPage)
+	if len(firstPage.Conflicts) != 1 ||
+		!reconciliationConflictResponsesEqual(firstPage.Conflicts[0], recorded) ||
+		firstPage.NextCursor != recorded.ID {
+		t.Fatalf("first conflict page = %#v, want first conflict and cursor %q", firstPage, recorded.ID)
+	}
+
+	listSecond := httptest.NewRequest(http.MethodGet, "/v1/repos/repo_123/reconciliation-conflicts?limit=1&cursor="+firstPage.NextCursor, nil)
+	listSecond.SetPathValue("repoID", "repo_123")
+	listSecondRecorder := httptest.NewRecorder()
+	handlers.ListReconciliationConflicts.ServeHTTP(listSecondRecorder, listSecond)
+	if listSecondRecorder.Code != http.StatusOK {
+		t.Fatalf("list second page status = %d, want 200: %s", listSecondRecorder.Code, listSecondRecorder.Body.String())
+	}
+	var secondPage reconciliationConflictPageResponse
+	decodeResponse(t, listSecondRecorder, &secondPage)
+	if len(secondPage.Conflicts) != 1 ||
+		secondPage.Conflicts[0].ID != string(secondRecorded.ID) ||
+		secondPage.Conflicts[0].Version.ID != string(secondRecorded.Version.ID) ||
+		secondPage.NextCursor != "" {
+		t.Fatalf("second conflict page = %#v, want second conflict and no cursor", secondPage)
+	}
+
+	invalidCursor := httptest.NewRequest(http.MethodGet, "/v1/repos/repo_123/reconciliation-conflicts?cursor=conflict_unknown", nil)
+	invalidCursor.SetPathValue("repoID", "repo_123")
+	invalidCursorRecorder := httptest.NewRecorder()
+	handlers.ListReconciliationConflicts.ServeHTTP(invalidCursorRecorder, invalidCursor)
+	if invalidCursorRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cursor status = %d, want 400: %s", invalidCursorRecorder.Code, invalidCursorRecorder.Body.String())
+	}
+	invalidLimit := httptest.NewRequest(http.MethodGet, "/v1/repos/repo_123/reconciliation-conflicts?limit=101", nil)
+	invalidLimit.SetPathValue("repoID", "repo_123")
+	invalidLimitRecorder := httptest.NewRecorder()
+	handlers.ListReconciliationConflicts.ServeHTTP(invalidLimitRecorder, invalidLimit)
+	if invalidLimitRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid limit status = %d, want 400: %s", invalidLimitRecorder.Code, invalidLimitRecorder.Body.String())
+	}
 }
 
 type reconciliationConflictResponse struct {
@@ -148,6 +214,11 @@ type reconciliationConflictResponse struct {
 	ToVersion     string   `json:"toVersion"`
 	ReportedBy    string   `json:"reportedBy"`
 	AffectedPaths []string `json:"affectedPaths"`
+}
+
+type reconciliationConflictPageResponse struct {
+	Conflicts  []reconciliationConflictResponse `json:"conflicts"`
+	NextCursor string                           `json:"nextCursor"`
 }
 
 func reconciliationConflictResponsesEqual(left, right reconciliationConflictResponse) bool {

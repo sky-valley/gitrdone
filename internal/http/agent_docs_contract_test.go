@@ -77,6 +77,7 @@ func TestAgentDiscoveryDocumentsContract(t *testing.T) {
 				requireBodyIncludes(t, body, "GET /v1/repos/{repoID}/changes/{changeID}")
 				requireBodyIncludes(t, body, "GET /v1/repos/{repoID}/changes/{changeID}/versions")
 				requireBodyIncludes(t, body, "POST /v1/repos/{repoID}/reconciliation-conflicts")
+				requireBodyIncludes(t, body, "Discover repository conflict history oldest-first")
 				requireBodyIncludes(t, body, "GET /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}")
 				requireBodyIncludes(t, body, "Affected paths are optional, bounded diagnostics")
 				requireBodyIncludes(t, body, "Administrative control API for trusted services")

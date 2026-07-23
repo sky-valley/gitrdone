@@ -21,6 +21,7 @@ type Repository interface {
 	ReadyDependents(ctx context.Context) ([]intent.Proposed, error)
 	RecordReconciliationConflict(ctx context.Context, request intent.ReconciliationConflictRequest) (intent.ReconciliationConflict, error)
 	ReconciliationConflict(ctx context.Context, id intent.ConflictID) (intent.ReconciliationConflict, bool, error)
+	ReconciliationConflicts(ctx context.Context, query intent.ReconciliationConflictQuery) (intent.ReconciliationConflictPage, error)
 	InspectChange(ctx context.Context, id intent.ChangeID) (intent.ChangeInspection, error)
 	Versions(ctx context.Context, query intent.VersionQuery) (intent.VersionPage, error)
 }
@@ -223,6 +224,14 @@ func (service *Service) ReconciliationConflict(ctx context.Context, repoID strin
 		return intent.ReconciliationConflict{}, intent.ErrReconciliationConflictNotFound
 	}
 	return conflict, nil
+}
+
+func (service *Service) ReconciliationConflicts(ctx context.Context, repoID string, query intent.ReconciliationConflictQuery) (intent.ReconciliationConflictPage, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.ReconciliationConflictPage{}, err
+	}
+	return repository.ReconciliationConflicts(ctx, query)
 }
 
 func (service *Service) Versions(ctx context.Context, repoID string, query intent.VersionQuery) (intent.VersionPage, error) {

@@ -39,6 +39,7 @@ type PromotionJournal interface {
 
 type ReconciliationConflictStore interface {
 	ReconciliationConflict(ctx context.Context, id ConflictID) (ReconciliationConflict, bool, error)
+	ReconciliationConflicts(ctx context.Context, after ConflictID, limit int) ([]ReconciliationConflict, bool, error)
 	ReconciliationConflictByIdempotencyKey(ctx context.Context, key string) (ReconciliationConflict, bool, error)
 	RecordReconciliationConflict(ctx context.Context, key string, conflict ReconciliationConflict) error
 }
@@ -66,6 +67,7 @@ type transientLedger struct {
 	completed   map[VersionID]PromotionID
 	byIntent    map[RevisionID]PromotionID
 	conflicts   map[ConflictID]ReconciliationConflict
+	conflictIDs []ConflictID
 	idempotency map[string]transientIdempotencyRecord
 }
 
@@ -241,6 +243,7 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.completed = make(map[VersionID]PromotionID)
 	ledger.byIntent = make(map[RevisionID]PromotionID)
 	ledger.conflicts = make(map[ConflictID]ReconciliationConflict)
+	ledger.conflictIDs = nil
 	ledger.idempotency = make(map[string]transientIdempotencyRecord)
 	return nil
 }

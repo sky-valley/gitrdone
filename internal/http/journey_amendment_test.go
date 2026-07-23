@@ -230,6 +230,18 @@ func TestJourneyConflictingReplayPreservesTheOriginalWorkspace(t *testing.T) {
 	readToken := createRepoTokenFixture(t, world.server.handler, world.server.repo.ID, "read", "conflict-reader")
 	res, body = request(t, world.server.handler, http.MethodGet, "/v1/repos/"+world.server.repo.ID+"/reconciliation-conflicts/"+conflictID, repoBasicAuthorization(readToken.Token), "", "")
 	requireStatus(t, res, body, http.StatusOK)
+	res, body = request(t, world.server.handler, http.MethodGet, "/v1/repos/"+world.server.repo.ID+"/reconciliation-conflicts?limit=1", repoBasicAuthorization(readToken.Token), "", "")
+	requireStatus(t, res, body, http.StatusOK)
+	var conflictPage struct {
+		Conflicts []struct {
+			ID string `json:"id"`
+		} `json:"conflicts"`
+		NextCursor string `json:"nextCursor"`
+	}
+	decodeJSON(t, res, body, &conflictPage)
+	if len(conflictPage.Conflicts) != 1 || conflictPage.Conflicts[0].ID != conflictID || conflictPage.NextCursor != "" {
+		t.Fatalf("read-token conflict discovery = %#v, want recorded conflict and no cursor", conflictPage)
+	}
 	readOnlyRecordBody := fmt.Sprintf(
 		`{"fromVersion":%q,"toVersion":%q,"descendantVersion":%q}`,
 		conflict.FromVersion,

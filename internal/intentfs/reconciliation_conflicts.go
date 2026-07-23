@@ -20,6 +20,36 @@ func (ledger *Ledger) ReconciliationConflict(ctx context.Context, id intent.Conf
 	return cloneReconciliationConflict(conflict), found, nil
 }
 
+func (ledger *Ledger) ReconciliationConflicts(ctx context.Context, after intent.ConflictID, limit int) ([]intent.ReconciliationConflict, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return nil, false, errors.New("journal is closed")
+	}
+	start := 0
+	if after != "" {
+		start = -1
+		for index, id := range ledger.state.conflictIDs {
+			if id == after {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, false, intent.ErrReconciliationConflictNotFound
+		}
+	}
+	end := min(start+limit, len(ledger.state.conflictIDs))
+	conflicts := make([]intent.ReconciliationConflict, 0, end-start)
+	for _, id := range ledger.state.conflictIDs[start:end] {
+		conflicts = append(conflicts, cloneReconciliationConflict(ledger.state.conflicts[id]))
+	}
+	return conflicts, end < len(ledger.state.conflictIDs), nil
+}
+
 func (ledger *Ledger) ReconciliationConflictByIdempotencyKey(ctx context.Context, key string) (intent.ReconciliationConflict, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return intent.ReconciliationConflict{}, false, err

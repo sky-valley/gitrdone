@@ -39,6 +39,16 @@ type ReconciliationConflictRequest struct {
 	AffectedPaths     []string
 }
 
+type ReconciliationConflictQuery struct {
+	After ConflictID
+	Limit int
+}
+
+type ReconciliationConflictPage struct {
+	Conflicts  []ReconciliationConflict
+	NextCursor ConflictID
+}
+
 func (repository *Repository) RecordReconciliationConflict(ctx context.Context, request ReconciliationConflictRequest) (ReconciliationConflict, error) {
 	if request.IdempotencyKey == "" {
 		return ReconciliationConflict{}, fmt.Errorf("%w: idempotency key is required", ErrInvalidReconciliationConflict)
@@ -161,6 +171,21 @@ func (repository *Repository) ReconciliationConflict(ctx context.Context, id Con
 		return ReconciliationConflict{}, false, fmt.Errorf("read reconciliation conflict: %w", err)
 	}
 	return cloneReconciliationConflict(conflict), found, nil
+}
+
+func (repository *Repository) ReconciliationConflicts(ctx context.Context, query ReconciliationConflictQuery) (ReconciliationConflictPage, error) {
+	if query.Limit < 1 || query.Limit > 100 {
+		return ReconciliationConflictPage{}, errors.New("reconciliation conflict page limit must be between 1 and 100")
+	}
+	conflicts, more, err := repository.conflicts.ReconciliationConflicts(ctx, query.After, query.Limit)
+	if err != nil {
+		return ReconciliationConflictPage{}, fmt.Errorf("read reconciliation conflicts: %w", err)
+	}
+	page := ReconciliationConflictPage{Conflicts: conflicts}
+	if more && len(conflicts) > 0 {
+		page.NextCursor = conflicts[len(conflicts)-1].ID
+	}
+	return page, nil
 }
 
 func NormalizeReconciliationConflictPaths(paths []string) ([]string, error) {
