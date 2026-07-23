@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 )
 
 type Client struct {
@@ -162,6 +163,7 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 		return err
 	}
 	parentRelationship := "judgement pending"
+	pendingAmendmentRationale := ""
 	if found {
 		change, err := client.change(ctx, origin, state.ParentChange)
 		if err != nil {
@@ -189,7 +191,11 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 			change.LatestAmendment.ToVersion != change.LatestVersion.ID:
 			return errors.New("server returned an unsupported submitted change lineage")
 		case change.LatestPromotion == nil:
+			if strings.TrimSpace(change.LatestAmendment.Rationale) == "" {
+				return errors.New("server returned an invalid latest amendment")
+			}
 			parentRelationship = "amended; judgement pending"
+			pendingAmendmentRationale = change.LatestAmendment.Rationale
 		case change.LatestPromotion.Version != change.LatestVersion.ID:
 			return errors.New("server returned an invalid latest promotion")
 		default:
@@ -241,5 +247,8 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 	fmt.Fprintf(client.Stdout, "Working: %s\n", working)
 	fmt.Fprintln(client.Stdout, "Based on:")
 	fmt.Fprintf(client.Stdout, "  %s — %s\n", state.ParentTitle, parentRelationship)
+	if pendingAmendmentRationale != "" {
+		fmt.Fprintf(client.Stdout, "Repository amendment: %s\n", pendingAmendmentRationale)
+	}
 	return nil
 }

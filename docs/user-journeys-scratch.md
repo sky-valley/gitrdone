@@ -213,7 +213,7 @@ User sees what changed, why, and what happened to ongoing work
 | J3.0 | C can be replayed cleanly onto B′ | Reconcile automatically, preserve an undo path, and explain the amendment and descendant rewrite | Executable first proof |
 | J3.1 | The user has no descendants of B | Move the clean workspace directly from B to accepted B′, preserve B as an undo path, and show the amendment without claiming that successor work was replayed | Executable proof |
 | J3.2 | C conflicts mechanically with B′ | Preserve B, B′, and C; surface the conflict as durable work requiring judgement rather than destroying the workspace | Native target |
-| J3.3 | B′ is still being judged rather than promoted | Show that the proposal has a new repository-produced version without misrepresenting it as accepted intent | Native target |
+| J3.3 | B′ is still being judged rather than promoted | Show that the proposal has a new repository-produced version and why, without misrepresenting it as accepted intent or moving the workspace | Executable proof |
 | J3.4 | The repository amends B more than once | Preserve every version and rationale, but avoid forcing the user through intermediate local churn that has no actionable value | Open |
 | J3.5 | The original version carried a signature | Preserve the original signature and attribution; represent the repository amendment as a separately authored version | Native target |
 | J3.6 | The user independently revises B while the repository creates B′ | Preserve both descendants as competing versions and require an explicit judgement or combination; do not guess identity | Open |
@@ -235,7 +235,7 @@ Your dependent work was rebased successfully.
 
 Journey 3 is expected to expose the clearest capability gradient: a jj-aware client may represent change evolution directly; a thin `grd` client over Git may need guarded rewrites and recovery refs; plain Git may only support a reduced, more manual reconciliation experience.
 
-The executable Git-adapter proofs keep B and B′ as immutable versions of one change, record the repository rationale, and promote B′ through the ordinary judgement path. For J3.0, `grd sync` replays a clean local C onto B′. For J3.1, a clean workspace still at B moves directly to B′ without invoking descendant replay. Both paths first create `refs/grd/recovery/<original-head>`. An already admitted dependent C still fails amendment closed until J2.3 exists; durable conflict materialization, multiple unseen amendments, and retry after interruption remain the later J3 deviations above.
+The executable Git-adapter proofs keep B and B′ as immutable versions of one change and record the repository rationale. For J3.0, the ordinary judgement path promotes B′ and `grd sync` replays a clean local C onto it. For J3.1, a clean workspace still at B moves directly to accepted B′ without invoking descendant replay. Both reconciliation paths first create `refs/grd/recovery/<original-head>`. For J3.3, B′ remains in judgement: `grd status` explains the pending repository amendment, while accepted intent, canonical trunk, and the workspace remain unchanged and `grd sync` refuses reconciliation. An already admitted dependent C still fails amendment closed until J2.3 exists; durable conflict materialization, multiple unseen amendments, and retry after interruption remain the later J3 deviations above.
 
 ## Working order
 
