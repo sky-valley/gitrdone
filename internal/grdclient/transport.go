@@ -59,8 +59,9 @@ type changeResponse struct {
 		Rationale   string `json:"rationale"`
 	} `json:"latestAmendment"`
 	LatestPromotion *struct {
-		ToIntent string `json:"toIntent"`
-		Version  string `json:"version"`
+		FromIntent string `json:"fromIntent"`
+		ToIntent   string `json:"toIntent"`
+		Version    string `json:"version"`
 	} `json:"latestPromotion"`
 }
 
@@ -85,6 +86,14 @@ type reconciliationConflictResponse struct {
 	ToVersion     string   `json:"toVersion"`
 	ReportedBy    string   `json:"reportedBy"`
 	AffectedPaths []string `json:"affectedPaths"`
+	Resolution    *struct {
+		ID          string `json:"id"`
+		FromVersion string `json:"fromVersion"`
+		ToVersion   string `json:"toVersion"`
+		BaseIntent  string `json:"baseIntent"`
+		ResolvedBy  string `json:"resolvedBy"`
+		Rationale   string `json:"rationale"`
+	} `json:"resolution"`
 }
 
 func requireAncestor(ctx context.Context, workdir string, base string, head string) error {

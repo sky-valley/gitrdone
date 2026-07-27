@@ -165,6 +165,8 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 	parentRelationship := "judgement pending"
 	pendingAmendmentRationale := ""
 	var pendingReconciliation *reconciliationConflictResponse
+	resolvedReconciliationRationale := ""
+	resolvedReconciliationStatus := ""
 	if found {
 		change, err := client.change(ctx, origin, state.ParentChange)
 		if err != nil {
@@ -204,12 +206,36 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 				parentRelationship = "amended and accepted; run grd sync"
 				break
 			}
-			conflict, err := client.awaitingReconciliationConflict(ctx, workdir, origin, state, change.LatestVersion.ID, head)
+			conflict, err := client.reconciliationConflictForWorkspace(ctx, workdir, origin, state, change.LatestVersion.ID, head)
 			if err != nil {
 				return err
 			}
 			parentRelationship = "amended and accepted"
-			pendingReconciliation = &conflict
+			switch conflict.State {
+			case "awaiting_judgement":
+				pendingReconciliation = &conflict
+			case "resolved":
+				resolvedChange, err := client.change(ctx, origin, conflict.Change.ID)
+				if err != nil {
+					return err
+				}
+				if err := validateResolvedConflictChange(conflict, change, resolvedChange); err != nil {
+					return err
+				}
+				resolvedReconciliationRationale = conflict.Resolution.Rationale
+				if resolvedChange.LatestPromotion == nil {
+					resolvedReconciliationStatus = "resolution awaiting judgement"
+					break
+				}
+				if current.ID != resolvedChange.LatestPromotion.ToIntent ||
+					current.ContentRef.Engine != "git" ||
+					current.ContentRef.Revision != resolvedChange.LatestVersion.ContentRef.Revision {
+					return errors.New("accepted intent does not match the reconciliation resolution")
+				}
+				resolvedReconciliationStatus = "resolved; run grd sync"
+			default:
+				return errors.New("server returned an invalid reconciliation conflict")
+			}
 		}
 	}
 	if !found {
@@ -261,13 +287,17 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 		fmt.Fprintf(client.Stdout, "Repository amendment: %s\n", pendingAmendmentRationale)
 	}
 	if pendingReconciliation != nil {
-		fmt.Fprintf(client.Stdout, "Reconciliation: %s — awaiting judgement\n", pendingReconciliation.ID)
+		fmt.Fprintln(client.Stdout, "Reconciliation: awaiting judgement")
 		if len(pendingReconciliation.AffectedPaths) > 0 {
 			fmt.Fprintln(client.Stdout, "Affected:")
 			for _, path := range pendingReconciliation.AffectedPaths {
 				fmt.Fprintf(client.Stdout, "  %s\n", path)
 			}
 		}
+	}
+	if resolvedReconciliationRationale != "" {
+		fmt.Fprintf(client.Stdout, "Reconciliation: %s\n", resolvedReconciliationStatus)
+		fmt.Fprintf(client.Stdout, "Repository resolution: %s\n", resolvedReconciliationRationale)
 	}
 	return nil
 }

@@ -917,7 +917,7 @@ The conflict read model derives `awaiting_judgement` when no resolution exists a
 
 Resolution and promotion remain separate domain outcomes. The current approve-all service may immediately run the ordinary judgement and promotion path after recording a resolution, but the resolution record does not itself move canonical intent. If accepted intent is no longer the expected B′ intent, resolution fails closed rather than rebasing onto an unexamined state.
 
-Repository-side resolution is currently an in-process judgement command, not a public HTTP mutation endpoint. Existing conflict GETs expose the derived state and resolution fact. The client-side portal moment that brings accepted C′ back into a workspace is a later slice.
+Repository-side resolution is currently an in-process judgement command, not a public HTTP mutation endpoint. Existing conflict GETs expose the derived state and resolution fact. Resolution 014 defines the implemented Git-client portal that brings C′ back into a workspace after ordinary judgement accepts it.
 
 The current `resolvedBy` value is attribution supplied by that trusted in-process caller, not proof that gitrdone authenticated a judgement principal. The future judgement-runtime boundary must inject an authenticated principal rather than accepting identity from an untrusted command payload.
 
@@ -928,3 +928,33 @@ This contract maps directly to jj without recreating it. jj-core may produce C�
 ### Agreed ownership rule
 
 > Engines produce reconciled content; the repository records which version resolved the conflict and decides whether that version becomes intent.
+
+## Resolution 014: the conflict portal replaces captured C and preserves work after it
+
+**Status:** Agreed and implemented for the Git-adapter J3.2 portal
+
+### Reservation
+
+Once repository judgement has accepted C′, a plain Git workspace may still be sitting on the captured conflicting C, with zero or more newer local commits on top. A blind reset would lose newer work. Rebasing the entire submitted lineage would replay C even though C′ has already replaced it. Treating sync as a new merge command would duplicate VCS-engine responsibility and make the client the source of repository truth.
+
+### Resolution
+
+`grd sync` is the Git portal for an already-recorded repository resolution; it does not resolve the conflict itself. Recording C′ does not imply that judgement promoted it. While C′ remains pending, status shows “resolution awaiting judgement” and sync leaves the workspace untouched. Once C′ is accepted, the client:
+
+- validates the immutable conflict, its C → C′ resolution lineage, the exact accepted B′ intent → C′ promotion edge, and the matching current intent;
+- fetches accepted C′ and requires the local workspace to descend from captured C;
+- protects the exact pre-sync HEAD at `refs/grd/recovery/<head>`;
+- moves directly to C′ when no commits follow C, or asks Git to replay only `C..HEAD` onto C′;
+- aborts and verifies restoration of the exact clean pre-sync workspace if that newer-work replay conflicts;
+- clears local continuation state only after the workspace transition succeeds; and
+- treats a workspace already descending from C′ as a completed transition, so retry after interrupted state cleanup does not replay commits twice.
+
+Before sync, `grd status` distinguishes a recorded resolution still awaiting judgement from an accepted resolution ready to sync, and shows the repository rationale in either case. Successful sync repeats the rationale and distinguishes a direct workspace update from replayed newer work. Change IDs, Version IDs, and the conflict ID remain validation machinery rather than normal user interaction.
+
+### Why this boundary
+
+gitrdone owns the durable identities, accepted outcome, explanation, and safety contract. The Git adapter owns ordinary fetch, reset, ancestry, recovery-ref, and rebase mechanics. It does not choose C′ and does not implement merging. A later jj-core adapter can replace those mechanical operations with first-class change evolution and descendant rebasing without changing the portal contract.
+
+### Remaining edge
+
+If work created after captured C also conflicts with accepted C′, the current Git adapter restores it cleanly and leaves the durable resolution available, but does not automatically create another judgement object. If that newer work contains merge commits, the Git adapter refuses before mutation rather than flattening its topology through ordinary rebase. Those follow-on paths need a deliberate product contract or a richer engine rather than recursive conflict manufacture or hidden history changes in the client.

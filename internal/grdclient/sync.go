@@ -47,9 +47,6 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 	if err != nil {
 		return fmt.Errorf("read workspace revision: %w", err)
 	}
-	if err := requireSubmittedAncestor(ctx, workdir, state.ParentRevision, head); err != nil {
-		return err
-	}
 
 	change, err := client.change(ctx, origin, state.ParentChange)
 	if err != nil {
@@ -75,6 +72,12 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 	if change.LatestVersion.ContentRef.Engine != "git" || change.LatestVersion.ContentRef.Revision == "" {
 		return errors.New("amended change is not represented by Git content")
 	}
+	if state.ConflictID != "" {
+		return client.reconcileConflictResolution(ctx, workdir, origin, state, change, head)
+	}
+	if err := requireSubmittedAncestor(ctx, workdir, state.ParentRevision, head); err != nil {
+		return err
+	}
 	targetRevision := change.LatestVersion.ContentRef.Revision
 	current, err := client.currentIntent(ctx, origin)
 	if err != nil {
@@ -82,12 +85,6 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 	}
 	if current.ID != change.LatestPromotion.ToIntent || current.ContentRef.Engine != "git" || current.ContentRef.Revision != targetRevision {
 		return errors.New("accepted intent does not match the amended change")
-	}
-	if state.ConflictID != "" {
-		if _, err := client.awaitingReconciliationConflict(ctx, workdir, origin, state, change.LatestVersion.ID, head); err != nil {
-			return err
-		}
-		return errors.New("reconciliation conflict is awaiting judgement")
 	}
 
 	if err := gitRun(ctx, workdir, "fetch", "--quiet", "origin"); err != nil {
@@ -159,9 +156,12 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 			if err := rememberContinuationState(ctx, workdir, origin.repoID, state); err != nil {
 				return err
 			}
+			if conflict.State == "resolved" {
+				return client.reconcileConflictResolution(ctx, workdir, origin, state, change, head)
+			}
 			fmt.Fprintf(client.Stdout, "Sync needs judgement: %s\n", state.ParentTitle)
 			fmt.Fprintf(client.Stdout, "Repository amendment: %s\n", change.LatestAmendment.Rationale)
-			fmt.Fprintf(client.Stdout, "Conflict recorded: %s\n", conflict.ID)
+			fmt.Fprintln(client.Stdout, "Reconciliation recorded; judgement pending.")
 			if len(conflict.AffectedPaths) > 0 {
 				fmt.Fprintln(client.Stdout, "Affected:")
 				for _, path := range conflict.AffectedPaths {
@@ -186,54 +186,6 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 		fmt.Fprintf(client.Stdout, "Replayed: %d local commits\n", commitCount)
 	}
 	fmt.Fprintf(client.Stdout, "Recovery: %s\n", recoveryRef)
-	return nil
-}
-
-func (client Client) awaitingReconciliationConflict(
-	ctx context.Context,
-	workdir string,
-	origin remote,
-	state continuationState,
-	toVersion string,
-	head string,
-) (reconciliationConflictResponse, error) {
-	conflict, err := client.reconciliationConflict(ctx, origin, state.ConflictID)
-	if err != nil {
-		return reconciliationConflictResponse{}, err
-	}
-	if err := validateReconciliationConflict(conflict, state, toVersion, "", ""); err != nil {
-		return reconciliationConflictResponse{}, err
-	}
-	basedOnCapturedWork, err := isAncestor(ctx, workdir, conflict.Version.ContentRef.Revision, head)
-	if err != nil {
-		return reconciliationConflictResponse{}, fmt.Errorf("check relationship to captured conflict work: %w", err)
-	}
-	if !basedOnCapturedWork {
-		return reconciliationConflictResponse{}, errors.New("workspace no longer descends from its captured reconciliation conflict")
-	}
-	return conflict, nil
-}
-
-func validateReconciliationConflict(conflict reconciliationConflictResponse, state continuationState, toVersion, descendantVersion, descendantRevision string) error {
-	if conflict.ID == "" || (state.ConflictID != "" && conflict.ID != state.ConflictID) ||
-		conflict.State != "awaiting_judgement" ||
-		conflict.Change.ID == "" ||
-		conflict.Version.ID == "" ||
-		conflict.Version.Change != conflict.Change.ID ||
-		conflict.FromVersion != state.ParentVersion ||
-		conflict.ToVersion != toVersion ||
-		conflict.ReportedBy == "" ||
-		conflict.Version.ContentRef.Engine != "git" ||
-		conflict.Version.ContentRef.Revision == "" ||
-		len(conflict.Version.Dependencies) != 0 {
-		return errors.New("server returned an invalid reconciliation conflict")
-	}
-	if descendantVersion != "" && conflict.Version.ID != descendantVersion {
-		return errors.New("server recorded a different reconciliation descendant version")
-	}
-	if descendantRevision != "" && conflict.Version.ContentRef.Revision != descendantRevision {
-		return errors.New("server recorded different reconciliation descendant content")
-	}
 	return nil
 }
 
