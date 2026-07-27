@@ -7,20 +7,24 @@ import (
 	"github.com/sky-valley/gitrdone/internal/intent"
 )
 
-func (ledger *Ledger) ReconciliationConflict(ctx context.Context, id intent.ConflictID) (intent.ReconciliationConflict, bool, error) {
+func (ledger *Ledger) ReconciliationConflict(ctx context.Context, id intent.ConflictID) (intent.ReconciliationConflictInspection, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return intent.ReconciliationConflict{}, false, err
+		return intent.ReconciliationConflictInspection{}, false, err
 	}
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	if ledger.closed {
-		return intent.ReconciliationConflict{}, false, errors.New("journal is closed")
+		return intent.ReconciliationConflictInspection{}, false, errors.New("journal is closed")
 	}
 	conflict, found := ledger.state.conflicts[id]
-	return cloneReconciliationConflict(conflict), found, nil
+	inspection := intent.ReconciliationConflictInspection{ReconciliationConflict: conflict}
+	if resolution, resolved := ledger.state.resolutions[id]; resolved {
+		inspection.Resolution = &resolution
+	}
+	return cloneReconciliationConflictInspection(inspection), found, nil
 }
 
-func (ledger *Ledger) ReconciliationConflicts(ctx context.Context, after intent.ConflictID, limit int) ([]intent.ReconciliationConflict, bool, error) {
+func (ledger *Ledger) ReconciliationConflicts(ctx context.Context, after intent.ConflictID, limit int) ([]intent.ReconciliationConflictInspection, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -43,31 +47,39 @@ func (ledger *Ledger) ReconciliationConflicts(ctx context.Context, after intent.
 		}
 	}
 	end := min(start+limit, len(ledger.state.conflictIDs))
-	conflicts := make([]intent.ReconciliationConflict, 0, end-start)
+	conflicts := make([]intent.ReconciliationConflictInspection, 0, end-start)
 	for _, id := range ledger.state.conflictIDs[start:end] {
-		conflicts = append(conflicts, cloneReconciliationConflict(ledger.state.conflicts[id]))
+		inspection := intent.ReconciliationConflictInspection{ReconciliationConflict: ledger.state.conflicts[id]}
+		if resolution, resolved := ledger.state.resolutions[id]; resolved {
+			inspection.Resolution = &resolution
+		}
+		conflicts = append(conflicts, cloneReconciliationConflictInspection(inspection))
 	}
 	return conflicts, end < len(ledger.state.conflictIDs), nil
 }
 
-func (ledger *Ledger) ReconciliationConflictByIdempotencyKey(ctx context.Context, key string) (intent.ReconciliationConflict, bool, error) {
+func (ledger *Ledger) ReconciliationConflictByIdempotencyKey(ctx context.Context, key string) (intent.ReconciliationConflictInspection, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return intent.ReconciliationConflict{}, false, err
+		return intent.ReconciliationConflictInspection{}, false, err
 	}
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	if ledger.closed {
-		return intent.ReconciliationConflict{}, false, errors.New("journal is closed")
+		return intent.ReconciliationConflictInspection{}, false, errors.New("journal is closed")
 	}
 	record, found := ledger.state.idempotency[key]
 	if !found {
-		return intent.ReconciliationConflict{}, false, nil
+		return intent.ReconciliationConflictInspection{}, false, nil
 	}
 	if record.operation != reconciliationConflictOperation {
-		return intent.ReconciliationConflict{}, false, intent.ErrIdempotencyConflict
+		return intent.ReconciliationConflictInspection{}, false, intent.ErrIdempotencyConflict
 	}
 	conflict, found := ledger.state.conflicts[record.conflictID]
-	return cloneReconciliationConflict(conflict), found, nil
+	inspection := intent.ReconciliationConflictInspection{ReconciliationConflict: conflict}
+	if resolution, resolved := ledger.state.resolutions[record.conflictID]; resolved {
+		inspection.Resolution = &resolution
+	}
+	return cloneReconciliationConflictInspection(inspection), found, nil
 }
 
 func (ledger *Ledger) RecordReconciliationConflict(ctx context.Context, key string, conflict intent.ReconciliationConflict) error {

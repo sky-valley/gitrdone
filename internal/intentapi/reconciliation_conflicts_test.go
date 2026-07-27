@@ -191,6 +191,56 @@ func TestNativeIntentAPIRecordsAndReadsReconciliationConflict(t *testing.T) {
 	if invalidLimitRecorder.Code != http.StatusBadRequest {
 		t.Fatalf("invalid limit status = %d, want 400: %s", invalidLimitRecorder.Code, invalidLimitRecorder.Body.String())
 	}
+
+	resolved, err := repository.ResolveReconciliationConflict(context.Background(), intent.ResolveReconciliationConflictRequest{
+		IdempotencyKey:  "resolve-b-c",
+		ConflictID:      intent.ConflictID(recorded.ID),
+		ExpectedVersion: descendant.Version.ID,
+		ExpectedIntent:  repository.CurrentIntent().ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "c2c2c2c2"},
+		Producer:        "repository-agent",
+		ResolvedBy:      "judgement-agent",
+		Rationale:       "replayed C onto accepted B prime",
+	})
+	if err != nil {
+		t.Fatalf("resolve recorded conflict: %v", err)
+	}
+	resolvedGet := httptest.NewRequest(http.MethodGet, "/v1/repos/repo_123/reconciliation-conflicts/"+recorded.ID, nil)
+	resolvedGet.SetPathValue("repoID", "repo_123")
+	resolvedGet.SetPathValue("conflictID", recorded.ID)
+	resolvedRecorder := httptest.NewRecorder()
+	handlers.GetReconciliationConflict.ServeHTTP(resolvedRecorder, resolvedGet)
+	if resolvedRecorder.Code != http.StatusOK {
+		t.Fatalf("resolved get status = %d, want 200: %s", resolvedRecorder.Code, resolvedRecorder.Body.String())
+	}
+	var resolvedResponse reconciliationConflictResponse
+	decodeResponse(t, resolvedRecorder, &resolvedResponse)
+	if resolvedResponse.State != "resolved" || resolvedResponse.Resolution == nil {
+		t.Fatalf("resolved conflict response = %#v, want derived resolved state and resolution", resolvedResponse)
+	}
+	if resolvedResponse.Resolution.ID != string(resolved.Resolution.ID) ||
+		resolvedResponse.Resolution.FromVersion != string(descendant.Version.ID) ||
+		resolvedResponse.Resolution.ToVersion != string(resolved.Version.ID) ||
+		resolvedResponse.Resolution.BaseIntent != string(repository.CurrentIntent().ID) ||
+		resolvedResponse.Resolution.ResolvedBy != "judgement-agent" ||
+		resolvedResponse.Resolution.Rationale != "replayed C onto accepted B prime" {
+		t.Fatalf("resolution response = %#v, want %#v", resolvedResponse.Resolution, resolved.Resolution)
+	}
+	resolvedConflictRetry := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/reconciliation-conflicts", bytes.NewReader(body))
+	resolvedConflictRetry.SetPathValue("repoID", "repo_123")
+	resolvedConflictRetry.Header.Set("Content-Type", "application/json")
+	resolvedConflictRetry.Header.Set("Idempotency-Key", "conflict-b-c")
+	resolvedConflictRetryRecorder := httptest.NewRecorder()
+	handlers.RecordReconciliationConflict.ServeHTTP(resolvedConflictRetryRecorder, intentapi.WithAuthenticatedProducer(resolvedConflictRetry, "ion"))
+	if resolvedConflictRetryRecorder.Code != http.StatusOK {
+		t.Fatalf("resolved conflict retry status = %d, want 200: %s", resolvedConflictRetryRecorder.Code, resolvedConflictRetryRecorder.Body.String())
+	}
+	var resolvedConflictRetried reconciliationConflictResponse
+	decodeResponse(t, resolvedConflictRetryRecorder, &resolvedConflictRetried)
+	if resolvedConflictRetried.State != "resolved" || resolvedConflictRetried.Resolution == nil ||
+		resolvedConflictRetried.Resolution.ID != string(resolved.Resolution.ID) {
+		t.Fatalf("resolved conflict retry = %#v, want same derived resolution", resolvedConflictRetried)
+	}
 }
 
 type reconciliationConflictResponse struct {
@@ -214,6 +264,14 @@ type reconciliationConflictResponse struct {
 	ToVersion     string   `json:"toVersion"`
 	ReportedBy    string   `json:"reportedBy"`
 	AffectedPaths []string `json:"affectedPaths"`
+	Resolution    *struct {
+		ID          string `json:"id"`
+		FromVersion string `json:"fromVersion"`
+		ToVersion   string `json:"toVersion"`
+		BaseIntent  string `json:"baseIntent"`
+		ResolvedBy  string `json:"resolvedBy"`
+		Rationale   string `json:"rationale"`
+	} `json:"resolution"`
 }
 
 type reconciliationConflictPageResponse struct {

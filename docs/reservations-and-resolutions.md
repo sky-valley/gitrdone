@@ -890,3 +890,41 @@ The current Git adapter may report that replay failed and provide affected paths
 ### Agreed ownership rule
 
 > The repository owns durable conflict identity and judgement lifecycle; the embedded VCS engine owns reconciliation and conflicted content representation.
+
+## Resolution 013: resolving a reconciliation conflict creates a new version, not a replacement
+
+**Status:** Agreed and implemented for the repository-side J3.2 continuation
+
+### Reservation
+
+Once B has been accepted as B′ and descendant C cannot be replayed cleanly, the repository needs a way to accept corrected content C′ without pretending that C disappeared, creating a second logical change, or teaching the judgement core to perform Git merges.
+
+The resolution operation must also remain safe when accepted intent moves while judgement is working, and it must not turn the public HTTP API into a collection of temporary judgement commands.
+
+### Resolution
+
+The VCS engine or judgement arm produces concrete C′ content. The repository then performs one internal, idempotent resolution operation that:
+
+- requires the exact conflict, C version, and still-current B′ intent;
+- admits C′ as a new immutable Version of C's existing Change;
+- records the attributed resolving actor separately from the content producer;
+- sets C′'s base to the accepted B′ intent;
+- removes superseded B/B′ lineage from promotion dependencies while preserving unrelated dependencies;
+- atomically records C′ and an immutable `ReconciliationResolution` fact;
+- leaves the original conflict unchanged as audit history.
+
+The conflict read model derives `awaiting_judgement` when no resolution exists and `resolved` when the immutable resolution fact exists. Retrying the same operation-typed idempotency key returns the same C′ and resolution, including after restart. Reusing that key for different input fails.
+
+Resolution and promotion remain separate domain outcomes. The current approve-all service may immediately run the ordinary judgement and promotion path after recording a resolution, but the resolution record does not itself move canonical intent. If accepted intent is no longer the expected B′ intent, resolution fails closed rather than rebasing onto an unexamined state.
+
+Repository-side resolution is currently an in-process judgement command, not a public HTTP mutation endpoint. Existing conflict GETs expose the derived state and resolution fact. The client-side portal moment that brings accepted C′ back into a workspace is a later slice.
+
+The current `resolvedBy` value is attribution supplied by that trusted in-process caller, not proof that gitrdone authenticated a judgement principal. The future judgement-runtime boundary must inject an authenticated principal rather than accepting identity from an untrusted command payload.
+
+### jj boundary
+
+This contract maps directly to jj without recreating it. jj-core may produce C′ through first-class conflict storage and descendant rebasing; gitrdone retains the stable Change identity, immutable Version and resolution facts, governing authority, and promotion decision. The Git proof supplies already-produced C′ as a content reference and does not implement a merge engine.
+
+### Agreed ownership rule
+
+> Engines produce reconciled content; the repository records which version resolved the conflict and decides whether that version becomes intent.

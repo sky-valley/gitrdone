@@ -257,7 +257,7 @@ func TestRepositoryListsReconciliationConflictsInDurableRecordingOrder(t *testin
 		t.Fatal("listed conflicts with an invalid zero page limit")
 	}
 
-	recorded := make([]intent.ReconciliationConflict, 0, 2)
+	recorded := make([]intent.ReconciliationConflictInspection, 0, 2)
 	for index, revision := range []string{"cccccccc", "dddddddd"} {
 		descendant, err := repository.Propose(ctx, intent.Proposal{
 			IdempotencyKey: "proposal-descendant-" + revision,

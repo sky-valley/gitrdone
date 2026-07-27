@@ -9,13 +9,14 @@ import (
 )
 
 const (
-	repositoryInitialized          = "repository_initialized"
-	proposalRecorded               = "proposal_recorded"
-	amendmentRecorded              = "amendment_recorded"
-	promotionPrepared              = "promotion_prepared"
-	promotionCompleted             = "promotion_completed"
-	promotionRecorded              = "promotion_recorded"
-	reconciliationConflictRecorded = "reconciliation_conflict_recorded"
+	repositoryInitialized            = "repository_initialized"
+	proposalRecorded                 = "proposal_recorded"
+	amendmentRecorded                = "amendment_recorded"
+	promotionPrepared                = "promotion_prepared"
+	promotionCompleted               = "promotion_completed"
+	promotionRecorded                = "promotion_recorded"
+	reconciliationConflictRecorded   = "reconciliation_conflict_recorded"
+	reconciliationResolutionRecorded = "reconciliation_resolution_recorded"
 )
 
 type journalState struct {
@@ -33,6 +34,7 @@ type journalState struct {
 	byIntent    map[intent.RevisionID]intent.PromotionID
 	conflicts   map[intent.ConflictID]intent.ReconciliationConflict
 	conflictIDs []intent.ConflictID
+	resolutions map[intent.ConflictID]intent.ReconciliationResolution
 	idempotency map[string]idempotencyRecord
 }
 
@@ -42,6 +44,7 @@ const (
 	proposalOperation idempotencyOperation = iota + 1
 	amendmentOperation
 	reconciliationConflictOperation
+	reconciliationResolutionOperation
 )
 
 type idempotencyRecord struct {
@@ -51,17 +54,18 @@ type idempotencyRecord struct {
 }
 
 type journalRecord struct {
-	Format                 int                            `json:"format"`
-	Kind                   string                         `json:"kind"`
-	Initial                *intent.Revision               `json:"initial,omitempty"`
-	IdempotencyKey         string                         `json:"idempotency_key,omitempty"`
-	Change                 *intent.Change                 `json:"change,omitempty"`
-	Version                *intent.Version                `json:"version,omitempty"`
-	Amendment              *intent.Amendment              `json:"amendment,omitempty"`
-	Promotion              *intent.Promotion              `json:"promotion,omitempty"`
-	PromotionID            intent.PromotionID             `json:"promotion_id,omitempty"`
-	NextIntent             *intent.Revision               `json:"next_intent,omitempty"`
-	ReconciliationConflict *intent.ReconciliationConflict `json:"reconciliation_conflict,omitempty"`
+	Format                   int                              `json:"format"`
+	Kind                     string                           `json:"kind"`
+	Initial                  *intent.Revision                 `json:"initial,omitempty"`
+	IdempotencyKey           string                           `json:"idempotency_key,omitempty"`
+	Change                   *intent.Change                   `json:"change,omitempty"`
+	Version                  *intent.Version                  `json:"version,omitempty"`
+	Amendment                *intent.Amendment                `json:"amendment,omitempty"`
+	Promotion                *intent.Promotion                `json:"promotion,omitempty"`
+	PromotionID              intent.PromotionID               `json:"promotion_id,omitempty"`
+	NextIntent               *intent.Revision                 `json:"next_intent,omitempty"`
+	ReconciliationConflict   *intent.ReconciliationConflict   `json:"reconciliation_conflict,omitempty"`
+	ReconciliationResolution *intent.ReconciliationResolution `json:"reconciliation_resolution,omitempty"`
 }
 
 func validateRecord(state *journalState, record journalRecord) error {
@@ -83,6 +87,8 @@ func validateRecord(state *journalState, record journalRecord) error {
 		return validatePromotion(state, record)
 	case reconciliationConflictRecorded:
 		return validateReconciliationConflict(state, record)
+	case reconciliationResolutionRecorded:
+		return validateReconciliationResolution(state, record)
 	default:
 		return fmt.Errorf("unknown journal record kind %q", record.Kind)
 	}
@@ -370,6 +376,7 @@ func newJournalState() journalState {
 		completed:   make(map[intent.VersionID]intent.PromotionID),
 		byIntent:    make(map[intent.RevisionID]intent.PromotionID),
 		conflicts:   make(map[intent.ConflictID]intent.ReconciliationConflict),
+		resolutions: make(map[intent.ConflictID]intent.ReconciliationResolution),
 		idempotency: make(map[string]idempotencyRecord),
 	}
 }
@@ -440,6 +447,8 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 				conflictID: conflict.ID,
 			}
 		}
+	case reconciliationResolutionRecorded:
+		applyReconciliationResolution(state, record)
 	}
 }
 
@@ -457,4 +466,13 @@ func cloneReconciliationConflict(conflict intent.ReconciliationConflict) intent.
 	conflict.Version = cloneVersion(conflict.Version)
 	conflict.AffectedPaths = slices.Clone(conflict.AffectedPaths)
 	return conflict
+}
+
+func cloneReconciliationConflictInspection(inspection intent.ReconciliationConflictInspection) intent.ReconciliationConflictInspection {
+	inspection.ReconciliationConflict = cloneReconciliationConflict(inspection.ReconciliationConflict)
+	if inspection.Resolution != nil {
+		resolution := *inspection.Resolution
+		inspection.Resolution = &resolution
+	}
+	return inspection
 }

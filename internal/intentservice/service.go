@@ -19,8 +19,9 @@ type Repository interface {
 	Promote(ctx context.Context, request intent.PromoteRequest) (intent.Promoted, error)
 	Promotion(ctx context.Context, versionID intent.VersionID) (intent.Promoted, bool, error)
 	ReadyDependents(ctx context.Context) ([]intent.Proposed, error)
-	RecordReconciliationConflict(ctx context.Context, request intent.ReconciliationConflictRequest) (intent.ReconciliationConflict, error)
-	ReconciliationConflict(ctx context.Context, id intent.ConflictID) (intent.ReconciliationConflict, bool, error)
+	RecordReconciliationConflict(ctx context.Context, request intent.ReconciliationConflictRequest) (intent.ReconciliationConflictInspection, error)
+	ResolveReconciliationConflict(ctx context.Context, request intent.ResolveReconciliationConflictRequest) (intent.ResolvedReconciliationConflict, error)
+	ReconciliationConflict(ctx context.Context, id intent.ConflictID) (intent.ReconciliationConflictInspection, bool, error)
 	ReconciliationConflicts(ctx context.Context, query intent.ReconciliationConflictQuery) (intent.ReconciliationConflictPage, error)
 	InspectChange(ctx context.Context, id intent.ChangeID) (intent.ChangeInspection, error)
 	Versions(ctx context.Context, query intent.VersionQuery) (intent.VersionPage, error)
@@ -87,6 +88,22 @@ type ReconciliationConflictRequest struct {
 	DescendantVersion intent.VersionID
 	ReportedBy        string
 	AffectedPaths     []string
+}
+
+type ReconciliationResolutionRequest struct {
+	IdempotencyKey  string
+	ConflictID      intent.ConflictID
+	ExpectedVersion intent.VersionID
+	ExpectedIntent  intent.RevisionID
+	Content         intent.ContentRef
+	Producer        string
+	ResolvedBy      string
+	Rationale       string
+}
+
+type ReconciliationResolutionReceipt struct {
+	Resolved  intent.ResolvedReconciliationConflict
+	Promotion *intent.Promoted
 }
 
 type Service struct {
@@ -196,10 +213,10 @@ func (service *Service) InspectChange(ctx context.Context, repoID string, change
 	return repository.InspectChange(ctx, changeID)
 }
 
-func (service *Service) RecordReconciliationConflict(ctx context.Context, repoID string, request ReconciliationConflictRequest) (intent.ReconciliationConflict, error) {
+func (service *Service) RecordReconciliationConflict(ctx context.Context, repoID string, request ReconciliationConflictRequest) (intent.ReconciliationConflictInspection, error) {
 	repository, err := service.resolve(ctx, repoID)
 	if err != nil {
-		return intent.ReconciliationConflict{}, err
+		return intent.ReconciliationConflictInspection{}, err
 	}
 	return repository.RecordReconciliationConflict(ctx, intent.ReconciliationConflictRequest{
 		IdempotencyKey:    request.IdempotencyKey,
@@ -211,17 +228,58 @@ func (service *Service) RecordReconciliationConflict(ctx context.Context, repoID
 	})
 }
 
-func (service *Service) ReconciliationConflict(ctx context.Context, repoID string, conflictID intent.ConflictID) (intent.ReconciliationConflict, error) {
+func (service *Service) ResolveReconciliationConflict(ctx context.Context, repoID string, request ReconciliationResolutionRequest) (ReconciliationResolutionReceipt, error) {
+	producer := strings.TrimSpace(request.Producer)
+	resolvedBy := strings.TrimSpace(request.ResolvedBy)
+	rationale := strings.TrimSpace(request.Rationale)
+	if producer == "" || resolvedBy == "" || rationale == "" {
+		return ReconciliationResolutionReceipt{}, errors.New("resolution producer, actor, and rationale are required")
+	}
 	repository, err := service.resolve(ctx, repoID)
 	if err != nil {
-		return intent.ReconciliationConflict{}, err
+		return ReconciliationResolutionReceipt{}, err
+	}
+	resolved, err := repository.ResolveReconciliationConflict(ctx, intent.ResolveReconciliationConflictRequest{
+		IdempotencyKey:  request.IdempotencyKey,
+		ConflictID:      request.ConflictID,
+		ExpectedVersion: request.ExpectedVersion,
+		ExpectedIntent:  request.ExpectedIntent,
+		Content:         request.Content,
+		Producer:        producer,
+		ResolvedBy:      resolvedBy,
+		Rationale:       rationale,
+	})
+	if err != nil {
+		return ReconciliationResolutionReceipt{}, err
+	}
+	receipt := ReconciliationResolutionReceipt{Resolved: resolved}
+	promoted, err := service.decideAndPromote(ctx, repository, JudgementSubject{
+		Change:  resolved.Change,
+		Version: resolved.Version,
+	})
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Promotion = promoted
+	if promoted != nil {
+		if err := service.reconsiderReady(ctx, repository); err != nil {
+			return receipt, fmt.Errorf("reconsider dependents after reconciliation resolution promotion: %w", err)
+		}
+	}
+	return receipt, nil
+}
+
+func (service *Service) ReconciliationConflict(ctx context.Context, repoID string, conflictID intent.ConflictID) (intent.ReconciliationConflictInspection, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.ReconciliationConflictInspection{}, err
 	}
 	conflict, found, err := repository.ReconciliationConflict(ctx, conflictID)
 	if err != nil {
-		return intent.ReconciliationConflict{}, err
+		return intent.ReconciliationConflictInspection{}, err
 	}
 	if !found {
-		return intent.ReconciliationConflict{}, intent.ErrReconciliationConflictNotFound
+		return intent.ReconciliationConflictInspection{}, intent.ErrReconciliationConflictNotFound
 	}
 	return conflict, nil
 }

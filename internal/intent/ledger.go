@@ -38,10 +38,13 @@ type PromotionJournal interface {
 }
 
 type ReconciliationConflictStore interface {
-	ReconciliationConflict(ctx context.Context, id ConflictID) (ReconciliationConflict, bool, error)
-	ReconciliationConflicts(ctx context.Context, after ConflictID, limit int) ([]ReconciliationConflict, bool, error)
-	ReconciliationConflictByIdempotencyKey(ctx context.Context, key string) (ReconciliationConflict, bool, error)
+	ReconciliationConflict(ctx context.Context, id ConflictID) (ReconciliationConflictInspection, bool, error)
+	ReconciliationConflicts(ctx context.Context, after ConflictID, limit int) ([]ReconciliationConflictInspection, bool, error)
+	ReconciliationConflictByIdempotencyKey(ctx context.Context, key string) (ReconciliationConflictInspection, bool, error)
 	RecordReconciliationConflict(ctx context.Context, key string, conflict ReconciliationConflict) error
+	ReconciliationResolution(ctx context.Context, conflictID ConflictID) (ReconciliationResolution, bool, error)
+	ReconciliationResolutionByIdempotencyKey(ctx context.Context, key string) (ResolvedReconciliationConflict, bool, error)
+	RecordReconciliationResolution(ctx context.Context, key string, resolution ReconciliationResolution, version Version) error
 }
 
 type Ledger interface {
@@ -68,6 +71,7 @@ type transientLedger struct {
 	byIntent    map[RevisionID]PromotionID
 	conflicts   map[ConflictID]ReconciliationConflict
 	conflictIDs []ConflictID
+	resolutions map[ConflictID]ReconciliationResolution
 	idempotency map[string]transientIdempotencyRecord
 }
 
@@ -77,6 +81,7 @@ const (
 	transientProposalOperation transientIdempotencyOperation = iota + 1
 	transientAmendmentOperation
 	transientReconciliationConflictOperation
+	transientReconciliationResolutionOperation
 )
 
 type transientIdempotencyRecord struct {
@@ -244,6 +249,7 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.byIntent = make(map[RevisionID]PromotionID)
 	ledger.conflicts = make(map[ConflictID]ReconciliationConflict)
 	ledger.conflictIDs = nil
+	ledger.resolutions = make(map[ConflictID]ReconciliationResolution)
 	ledger.idempotency = make(map[string]transientIdempotencyRecord)
 	return nil
 }

@@ -6,14 +6,18 @@ import (
 	"slices"
 )
 
-func (ledger *transientLedger) ReconciliationConflict(_ context.Context, id ConflictID) (ReconciliationConflict, bool, error) {
+func (ledger *transientLedger) ReconciliationConflict(_ context.Context, id ConflictID) (ReconciliationConflictInspection, bool, error) {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
 	conflict, found := ledger.conflicts[id]
-	return cloneReconciliationConflict(conflict), found, nil
+	inspection := ReconciliationConflictInspection{ReconciliationConflict: conflict}
+	if resolution, resolved := ledger.resolutions[id]; resolved {
+		inspection.Resolution = &resolution
+	}
+	return cloneReconciliationConflictInspection(inspection), found, nil
 }
 
-func (ledger *transientLedger) ReconciliationConflicts(_ context.Context, after ConflictID, limit int) ([]ReconciliationConflict, bool, error) {
+func (ledger *transientLedger) ReconciliationConflicts(_ context.Context, after ConflictID, limit int) ([]ReconciliationConflictInspection, bool, error) {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
 	start := 0
@@ -30,25 +34,33 @@ func (ledger *transientLedger) ReconciliationConflicts(_ context.Context, after 
 		}
 	}
 	end := min(start+limit, len(ledger.conflictIDs))
-	conflicts := make([]ReconciliationConflict, 0, end-start)
+	conflicts := make([]ReconciliationConflictInspection, 0, end-start)
 	for _, id := range ledger.conflictIDs[start:end] {
-		conflicts = append(conflicts, cloneReconciliationConflict(ledger.conflicts[id]))
+		inspection := ReconciliationConflictInspection{ReconciliationConflict: ledger.conflicts[id]}
+		if resolution, resolved := ledger.resolutions[id]; resolved {
+			inspection.Resolution = &resolution
+		}
+		conflicts = append(conflicts, cloneReconciliationConflictInspection(inspection))
 	}
 	return conflicts, end < len(ledger.conflictIDs), nil
 }
 
-func (ledger *transientLedger) ReconciliationConflictByIdempotencyKey(_ context.Context, key string) (ReconciliationConflict, bool, error) {
+func (ledger *transientLedger) ReconciliationConflictByIdempotencyKey(_ context.Context, key string) (ReconciliationConflictInspection, bool, error) {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
 	record, found := ledger.idempotency[key]
 	if !found {
-		return ReconciliationConflict{}, false, nil
+		return ReconciliationConflictInspection{}, false, nil
 	}
 	if record.operation != transientReconciliationConflictOperation {
-		return ReconciliationConflict{}, false, ErrIdempotencyConflict
+		return ReconciliationConflictInspection{}, false, ErrIdempotencyConflict
 	}
 	conflict, found := ledger.conflicts[record.conflictID]
-	return cloneReconciliationConflict(conflict), found, nil
+	inspection := ReconciliationConflictInspection{ReconciliationConflict: conflict}
+	if resolution, resolved := ledger.resolutions[record.conflictID]; resolved {
+		inspection.Resolution = &resolution
+	}
+	return cloneReconciliationConflictInspection(inspection), found, nil
 }
 
 func (ledger *transientLedger) RecordReconciliationConflict(_ context.Context, key string, conflict ReconciliationConflict) error {

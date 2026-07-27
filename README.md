@@ -175,9 +175,9 @@ GET  /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}
 
 Repository amendment is an internal judgement operation, not a public command. Change inspection exposes `latestAmendment` and `latestPromotion` when those outcomes exist; the bounded versions collection preserves the immutable history.
 
-A reconciliation-conflict POST records the authenticated observation that an already-admitted descendant version C could not be replayed from submitted B onto the still-current accepted amendment B′. It preserves C's existing Change/Version identity, records the authenticated reporter as `reportedBy`, and returns a durable conflict in `awaiting_judgement` state. Affected paths are optional, bounded adapter diagnostics, not a replacement for jj-core's future conflicted-content representation.
+A reconciliation-conflict POST records the authenticated observation that an already-admitted descendant version C could not be replayed from submitted B onto the still-current accepted amendment B′. It preserves C's existing Change/Version identity, records the authenticated reporter as `reportedBy`, and initially returns a durable conflict in `awaiting_judgement` state. Affected paths are optional, bounded adapter diagnostics, not a replacement for jj-core's future conflicted-content representation.
 
-The conflict collection GET returns durable conflicts oldest-first with bounded `limit` and opaque `cursor` pagination. This is repository history, not a separately persisted worker queue; `awaiting_judgement` remains a derived state.
+The conflict collection GET returns durable conflicts oldest-first with bounded `limit` and opaque `cursor` pagination. This is repository history, not a separately persisted worker queue. An internal judgement operation may admit engine-produced C′ as a new Version of C and record an immutable resolution before ordinary promotion; conflict reads then derive `resolved` and include that resolution. There is intentionally no public conflict-resolution mutation endpoint yet.
 
 ## grd client
 

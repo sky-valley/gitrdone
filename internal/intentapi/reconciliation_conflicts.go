@@ -13,14 +13,24 @@ import (
 const defaultReconciliationConflictPageSize = 50
 
 type reconciliationConflictResponse struct {
-	ID            string                 `json:"id"`
-	State         string                 `json:"state"`
-	Change        changeIdentityResponse `json:"change"`
-	Version       versionResponse        `json:"version"`
-	FromVersion   string                 `json:"fromVersion"`
-	ToVersion     string                 `json:"toVersion"`
-	ReportedBy    string                 `json:"reportedBy"`
-	AffectedPaths []string               `json:"affectedPaths"`
+	ID            string                            `json:"id"`
+	State         string                            `json:"state"`
+	Change        changeIdentityResponse            `json:"change"`
+	Version       versionResponse                   `json:"version"`
+	FromVersion   string                            `json:"fromVersion"`
+	ToVersion     string                            `json:"toVersion"`
+	ReportedBy    string                            `json:"reportedBy"`
+	AffectedPaths []string                          `json:"affectedPaths"`
+	Resolution    *reconciliationResolutionResponse `json:"resolution,omitempty"`
+}
+
+type reconciliationResolutionResponse struct {
+	ID          string `json:"id"`
+	FromVersion string `json:"fromVersion"`
+	ToVersion   string `json:"toVersion"`
+	BaseIntent  string `json:"baseIntent"`
+	ResolvedBy  string `json:"resolvedBy"`
+	Rationale   string `json:"rationale"`
 }
 
 func recordReconciliationConflictHandler(service *intentservice.Service) http.Handler {
@@ -164,8 +174,8 @@ func writeReconciliationConflictError(w http.ResponseWriter, err error) bool {
 	return false
 }
 
-func mapReconciliationConflict(conflict intent.ReconciliationConflict) reconciliationConflictResponse {
-	return reconciliationConflictResponse{
+func mapReconciliationConflict(conflict intent.ReconciliationConflictInspection) reconciliationConflictResponse {
+	response := reconciliationConflictResponse{
 		ID:            string(conflict.ID),
 		State:         "awaiting_judgement",
 		Change:        mapChange(conflict.Change),
@@ -175,4 +185,16 @@ func mapReconciliationConflict(conflict intent.ReconciliationConflict) reconcili
 		ReportedBy:    conflict.ReportedBy,
 		AffectedPaths: conflict.AffectedPaths,
 	}
+	if conflict.Resolution != nil {
+		response.State = "resolved"
+		response.Resolution = &reconciliationResolutionResponse{
+			ID:          string(conflict.Resolution.ID),
+			FromVersion: string(conflict.Resolution.FromVersion),
+			ToVersion:   string(conflict.Resolution.ToVersion),
+			BaseIntent:  string(conflict.Resolution.BaseIntent),
+			ResolvedBy:  conflict.Resolution.ResolvedBy,
+			Rationale:   conflict.Resolution.Rationale,
+		}
+	}
+	return response
 }

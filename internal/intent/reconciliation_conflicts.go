@@ -30,6 +30,11 @@ type ReconciliationConflict struct {
 	AffectedPaths []string
 }
 
+type ReconciliationConflictInspection struct {
+	ReconciliationConflict
+	Resolution *ReconciliationResolution
+}
+
 type ReconciliationConflictRequest struct {
 	IdempotencyKey    string
 	FromVersion       VersionID
@@ -45,23 +50,23 @@ type ReconciliationConflictQuery struct {
 }
 
 type ReconciliationConflictPage struct {
-	Conflicts  []ReconciliationConflict
+	Conflicts  []ReconciliationConflictInspection
 	NextCursor ConflictID
 }
 
-func (repository *Repository) RecordReconciliationConflict(ctx context.Context, request ReconciliationConflictRequest) (ReconciliationConflict, error) {
+func (repository *Repository) RecordReconciliationConflict(ctx context.Context, request ReconciliationConflictRequest) (ReconciliationConflictInspection, error) {
 	if request.IdempotencyKey == "" {
-		return ReconciliationConflict{}, fmt.Errorf("%w: idempotency key is required", ErrInvalidReconciliationConflict)
+		return ReconciliationConflictInspection{}, fmt.Errorf("%w: idempotency key is required", ErrInvalidReconciliationConflict)
 	}
 	if request.FromVersion == "" || request.ToVersion == "" || request.DescendantVersion == "" {
-		return ReconciliationConflict{}, fmt.Errorf("%w: versions are required", ErrInvalidReconciliationConflict)
+		return ReconciliationConflictInspection{}, fmt.Errorf("%w: versions are required", ErrInvalidReconciliationConflict)
 	}
 	if request.ReportedBy == "" {
-		return ReconciliationConflict{}, fmt.Errorf("%w: reporter is required", ErrInvalidReconciliationConflict)
+		return ReconciliationConflictInspection{}, fmt.Errorf("%w: reporter is required", ErrInvalidReconciliationConflict)
 	}
 	paths, err := NormalizeReconciliationConflictPaths(request.AffectedPaths)
 	if err != nil {
-		return ReconciliationConflict{}, err
+		return ReconciliationConflictInspection{}, err
 	}
 
 	repository.promotionMu.Lock()
@@ -71,84 +76,84 @@ func (repository *Repository) RecordReconciliationConflict(ctx context.Context, 
 
 	existing, found, err := repository.conflicts.ReconciliationConflictByIdempotencyKey(ctx, request.IdempotencyKey)
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("read reconciliation conflict idempotency record: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("read reconciliation conflict idempotency record: %w", err)
 	}
 	if found {
 		if existing.FromVersion != request.FromVersion ||
 			existing.ToVersion != request.ToVersion ||
 			existing.Version.ID != request.DescendantVersion ||
 			existing.ReportedBy != request.ReportedBy {
-			return ReconciliationConflict{}, ErrIdempotencyConflict
+			return ReconciliationConflictInspection{}, ErrIdempotencyConflict
 		}
-		return cloneReconciliationConflict(existing), nil
+		return cloneReconciliationConflictInspection(existing), nil
 	}
 
 	from, found, err := repository.changes.Version(ctx, request.FromVersion)
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("read reconciliation source version: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("read reconciliation source version: %w", err)
 	}
 	if !found {
-		return ReconciliationConflict{}, ErrVersionNotFound
+		return ReconciliationConflictInspection{}, ErrVersionNotFound
 	}
 	to, found, err := repository.changes.Version(ctx, request.ToVersion)
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("read reconciliation target version: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("read reconciliation target version: %w", err)
 	}
 	if !found {
-		return ReconciliationConflict{}, ErrVersionNotFound
+		return ReconciliationConflictInspection{}, ErrVersionNotFound
 	}
 	if from.ChangeID != to.ChangeID {
-		return ReconciliationConflict{}, fmt.Errorf("%w: versions belong to different changes", ErrInvalidReconciliationLineage)
+		return ReconciliationConflictInspection{}, fmt.Errorf("%w: versions belong to different changes", ErrInvalidReconciliationLineage)
 	}
 	latest, found, err := repository.changes.LatestVersion(ctx, from.ChangeID)
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("read latest reconciled version: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("read latest reconciled version: %w", err)
 	}
 	if !found || latest.ID != to.ID {
-		return ReconciliationConflict{}, ErrVersionAdvanced
+		return ReconciliationConflictInspection{}, ErrVersionAdvanced
 	}
 	amendment, found, err := repository.amendments.Amendment(ctx, to.ID)
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("read reconciliation amendment: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("read reconciliation amendment: %w", err)
 	}
 	if !found || amendment.FromVersion != from.ID || amendment.ToVersion != to.ID {
-		return ReconciliationConflict{}, fmt.Errorf("%w: versions are not an amendment lineage", ErrInvalidReconciliationLineage)
+		return ReconciliationConflictInspection{}, fmt.Errorf("%w: versions are not an amendment lineage", ErrInvalidReconciliationLineage)
 	}
 	promoted, found, err := repository.promotions.CompletedPromotion(ctx, to.ID)
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("read reconciliation target promotion: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("read reconciliation target promotion: %w", err)
 	}
 	if !found {
-		return ReconciliationConflict{}, ErrVersionNotPromoted
+		return ReconciliationConflictInspection{}, ErrVersionNotPromoted
 	}
 	current, found, err := repository.intents.CurrentIntent(ctx)
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("read current intent for reconciliation conflict: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("read current intent for reconciliation conflict: %w", err)
 	}
 	if !found || promoted.Intent.ID != current.ID {
-		return ReconciliationConflict{}, ErrIntentAdvanced
+		return ReconciliationConflictInspection{}, ErrIntentAdvanced
 	}
 	descendant, found, err := repository.changes.Version(ctx, request.DescendantVersion)
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("read reconciliation descendant version: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("read reconciliation descendant version: %w", err)
 	}
 	if !found {
-		return ReconciliationConflict{}, ErrVersionNotFound
+		return ReconciliationConflictInspection{}, ErrVersionNotFound
 	}
 	if descendant.ChangeID == from.ChangeID || descendant.BaseIntent != from.BaseIntent {
-		return ReconciliationConflict{}, fmt.Errorf("%w: descendant does not identify separate work from the reconciled base", ErrInvalidReconciliationLineage)
+		return ReconciliationConflictInspection{}, fmt.Errorf("%w: descendant does not identify separate work from the reconciled base", ErrInvalidReconciliationLineage)
 	}
 	descendantChange, found, err := repository.changes.Change(ctx, descendant.ChangeID)
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("read reconciliation descendant change: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("read reconciliation descendant change: %w", err)
 	}
 	if !found {
-		return ReconciliationConflict{}, ErrChangeNotFound
+		return ReconciliationConflictInspection{}, ErrChangeNotFound
 	}
 
 	conflictID, err := newID("conflict")
 	if err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("create reconciliation conflict id: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("create reconciliation conflict id: %w", err)
 	}
 	conflict := ReconciliationConflict{
 		ID:            ConflictID(conflictID),
@@ -160,17 +165,17 @@ func (repository *Repository) RecordReconciliationConflict(ctx context.Context, 
 		AffectedPaths: paths,
 	}
 	if err := repository.conflicts.RecordReconciliationConflict(ctx, request.IdempotencyKey, conflict); err != nil {
-		return ReconciliationConflict{}, fmt.Errorf("record reconciliation conflict: %w", err)
+		return ReconciliationConflictInspection{}, fmt.Errorf("record reconciliation conflict: %w", err)
 	}
-	return cloneReconciliationConflict(conflict), nil
+	return ReconciliationConflictInspection{ReconciliationConflict: cloneReconciliationConflict(conflict)}, nil
 }
 
-func (repository *Repository) ReconciliationConflict(ctx context.Context, id ConflictID) (ReconciliationConflict, bool, error) {
+func (repository *Repository) ReconciliationConflict(ctx context.Context, id ConflictID) (ReconciliationConflictInspection, bool, error) {
 	conflict, found, err := repository.conflicts.ReconciliationConflict(ctx, id)
 	if err != nil {
-		return ReconciliationConflict{}, false, fmt.Errorf("read reconciliation conflict: %w", err)
+		return ReconciliationConflictInspection{}, false, fmt.Errorf("read reconciliation conflict: %w", err)
 	}
-	return cloneReconciliationConflict(conflict), found, nil
+	return cloneReconciliationConflictInspection(conflict), found, nil
 }
 
 func (repository *Repository) ReconciliationConflicts(ctx context.Context, query ReconciliationConflictQuery) (ReconciliationConflictPage, error) {
@@ -217,4 +222,13 @@ func cloneReconciliationConflict(conflict ReconciliationConflict) Reconciliation
 	conflict.Version = cloneVersion(conflict.Version)
 	conflict.AffectedPaths = slices.Clone(conflict.AffectedPaths)
 	return conflict
+}
+
+func cloneReconciliationConflictInspection(inspection ReconciliationConflictInspection) ReconciliationConflictInspection {
+	inspection.ReconciliationConflict = cloneReconciliationConflict(inspection.ReconciliationConflict)
+	if inspection.Resolution != nil {
+		resolution := *inspection.Resolution
+		inspection.Resolution = &resolution
+	}
+	return inspection
 }
