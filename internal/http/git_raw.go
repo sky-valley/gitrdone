@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -94,14 +95,18 @@ func (backend execGitRawBackend) ServeGitRawFile(w http.ResponseWriter, r *http.
 	}
 	ctx := r.Context()
 
-	if !gitRevisionExists(ctx, gitPath, grant.RepoPath, target.rev) {
-		http.Error(w, "raw file revision was not found", http.StatusNotFound)
-		return nil
+	resolvedRev, err := resolveGitCommit(ctx, gitPath, grant.RepoPath, target.rev)
+	if err != nil {
+		if errors.Is(err, errGitRevisionNotFound) {
+			http.Error(w, "raw file revision was not found", http.StatusNotFound)
+			return nil
+		}
+		return err
 	}
 
 	// rev:path is a tree lookup inside the object store; the validated hex rev
 	// keeps the combined argument from ever parsing as an option.
-	spec := target.rev + ":" + target.path
+	spec := resolvedRev + ":" + target.path
 
 	objectType, err := gitObjectType(ctx, gitPath, grant.RepoPath, spec)
 	if err != nil {
