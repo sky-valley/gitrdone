@@ -109,11 +109,21 @@ func (repository *Repository) ResolveReconciliationConflict(ctx context.Context,
 	if !found || current.ID != request.ExpectedIntent {
 		return ResolvedReconciliationConflict{}, ErrIntentAdvanced
 	}
+	if conflict.BaseIntent != current.ID {
+		return ResolvedReconciliationConflict{}, ErrIntentAdvanced
+	}
 	targetPromotion, found, err := repository.promotions.CompletedPromotion(ctx, conflict.ToVersion)
 	if err != nil {
 		return ResolvedReconciliationConflict{}, fmt.Errorf("read reconciliation target promotion: %w", err)
 	}
-	if !found || targetPromotion.Intent.ID != current.ID {
+	if !found {
+		return ResolvedReconciliationConflict{}, ErrIntentAdvanced
+	}
+	acceptedInHistory, err := repository.intentDescendsFrom(ctx, current, targetPromotion.Intent.ID)
+	if err != nil {
+		return ResolvedReconciliationConflict{}, err
+	}
+	if !acceptedInHistory {
 		return ResolvedReconciliationConflict{}, ErrIntentAdvanced
 	}
 

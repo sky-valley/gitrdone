@@ -12,6 +12,8 @@ const (
 	repositoryInitialized            = "repository_initialized"
 	proposalRecorded                 = "proposal_recorded"
 	amendmentRecorded                = "amendment_recorded"
+	dependentReconciliationRecorded  = "dependent_reconciliation_recorded"
+	heldVersionRebaseRecorded        = "held_version_rebase_recorded"
 	promotionPrepared                = "promotion_prepared"
 	promotionCompleted               = "promotion_completed"
 	promotionRecorded                = "promotion_recorded"
@@ -20,22 +22,25 @@ const (
 )
 
 type journalState struct {
-	current     intent.Revision
-	revisions   map[intent.RevisionID]intent.Revision
-	changes     map[intent.ChangeID]intent.Change
-	versions    map[intent.VersionID]intent.Version
-	versionIDs  map[intent.ChangeID][]intent.VersionID
-	dependents  map[intent.VersionID][]intent.VersionID
-	amendments  map[intent.VersionID]intent.Amendment
-	promotions  map[intent.PromotionID]intent.Promotion
-	prepared    map[intent.PromotionID]intent.PreparedPromotion
-	pending     intent.PromotionID
-	completed   map[intent.VersionID]intent.PromotionID
-	byIntent    map[intent.RevisionID]intent.PromotionID
-	conflicts   map[intent.ConflictID]intent.ReconciliationConflict
-	conflictIDs []intent.ConflictID
-	resolutions map[intent.ConflictID]intent.ReconciliationResolution
-	idempotency map[string]idempotencyRecord
+	current           intent.Revision
+	revisions         map[intent.RevisionID]intent.Revision
+	changes           map[intent.ChangeID]intent.Change
+	versions          map[intent.VersionID]intent.Version
+	versionIDs        map[intent.ChangeID][]intent.VersionID
+	dependents        map[intent.VersionID][]intent.VersionID
+	amendments        map[intent.VersionID]intent.Amendment
+	reconciliations   map[intent.VersionID]intent.DependentReconciliation
+	reconciliationIDs []intent.VersionID
+	rebases           map[intent.VersionID]intent.HeldVersionRebase
+	promotions        map[intent.PromotionID]intent.Promotion
+	prepared          map[intent.PromotionID]intent.PreparedPromotion
+	pending           intent.PromotionID
+	completed         map[intent.VersionID]intent.PromotionID
+	byIntent          map[intent.RevisionID]intent.PromotionID
+	conflicts         map[intent.ConflictID]intent.ReconciliationConflict
+	conflictIDs       []intent.ConflictID
+	resolutions       map[intent.ConflictID]intent.ReconciliationResolution
+	idempotency       map[string]idempotencyRecord
 }
 
 type idempotencyOperation uint8
@@ -43,6 +48,8 @@ type idempotencyOperation uint8
 const (
 	proposalOperation idempotencyOperation = iota + 1
 	amendmentOperation
+	dependentReconciliationOperation
+	heldVersionRebaseOperation
 	reconciliationConflictOperation
 	reconciliationResolutionOperation
 )
@@ -61,11 +68,26 @@ type journalRecord struct {
 	Change                   *intent.Change                   `json:"change,omitempty"`
 	Version                  *intent.Version                  `json:"version,omitempty"`
 	Amendment                *intent.Amendment                `json:"amendment,omitempty"`
+	DependentReconciliation  *intent.DependentReconciliation  `json:"dependent_reconciliation,omitempty"`
+	HeldVersionRebase        *intent.HeldVersionRebase        `json:"held_version_rebase,omitempty"`
 	Promotion                *intent.Promotion                `json:"promotion,omitempty"`
 	PromotionID              intent.PromotionID               `json:"promotion_id,omitempty"`
 	NextIntent               *intent.Revision                 `json:"next_intent,omitempty"`
 	ReconciliationConflict   *intent.ReconciliationConflict   `json:"reconciliation_conflict,omitempty"`
 	ReconciliationResolution *intent.ReconciliationResolution `json:"reconciliation_resolution,omitempty"`
+}
+
+func normalizeLegacyRecord(state *journalState, record journalRecord) journalRecord {
+	if record.Kind != reconciliationConflictRecorded ||
+		record.ReconciliationConflict == nil ||
+		record.ReconciliationConflict.BaseIntent != "" ||
+		state.current.ID == "" {
+		return record
+	}
+	conflict := *record.ReconciliationConflict
+	conflict.BaseIntent = state.current.ID
+	record.ReconciliationConflict = &conflict
+	return record
 }
 
 func validateRecord(state *journalState, record journalRecord) error {
@@ -79,6 +101,10 @@ func validateRecord(state *journalState, record journalRecord) error {
 		return validateProposal(state, record)
 	case amendmentRecorded:
 		return validateAmendment(state, record)
+	case dependentReconciliationRecorded:
+		return validateDependentReconciliation(state, record)
+	case heldVersionRebaseRecorded:
+		return validateHeldVersionRebase(state, record)
 	case promotionPrepared:
 		return validatePreparedPromotion(state, record)
 	case promotionCompleted:
@@ -114,14 +140,13 @@ func validateReconciliationConflict(state *journalState, record journalRecord) e
 	}
 	if conflict.ID == "" || conflict.Change.ID == "" || conflict.Version.ID == "" ||
 		conflict.Version.ChangeID != conflict.Change.ID ||
-		conflict.FromVersion == "" || conflict.ToVersion == "" || conflict.ReportedBy == "" {
+		conflict.FromVersion == "" || conflict.ToVersion == "" || conflict.BaseIntent == "" || conflict.ReportedBy == "" {
 		return errors.New("invalid reconciliation conflict identity")
 	}
 	from, fromFound := state.versions[conflict.FromVersion]
 	to, toFound := state.versions[conflict.ToVersion]
-	amendment, amendmentFound := state.amendments[conflict.ToVersion]
 	if !fromFound || !toFound || from.ChangeID != to.ChangeID ||
-		!amendmentFound || amendment.FromVersion != from.ID || amendment.ToVersion != to.ID {
+		!recordedAmendmentDescendant(state, from.ID, to.ID) {
 		return errors.New("invalid reconciliation conflict lineage")
 	}
 	promotionID, promoted := state.completed[to.ID]
@@ -129,12 +154,15 @@ func validateReconciliationConflict(state *journalState, record journalRecord) e
 		return intent.ErrVersionNotPromoted
 	}
 	promotion, found := state.promotions[promotionID]
-	if !found || promotion.ToIntent != state.current.ID {
+	if !found || conflict.BaseIntent != state.current.ID ||
+		!recordedRevisionDescendsFrom(state, state.current.ID, promotion.ToIntent) {
 		return intent.ErrIntentAdvanced
 	}
 	descendant, descendantFound := state.versions[conflict.Version.ID]
 	descendantChange, changeFound := state.changes[conflict.Change.ID]
+	descendantIDs := state.versionIDs[conflict.Change.ID]
 	if !descendantFound || !changeFound ||
+		len(descendantIDs) == 0 || descendantIDs[len(descendantIDs)-1] != descendant.ID ||
 		descendant.ChangeID == from.ChangeID ||
 		descendant.BaseIntent != from.BaseIntent ||
 		descendant.ChangeID != descendantChange.ID ||
@@ -186,9 +214,6 @@ func validateAmendment(state *journalState, record journalRecord) error {
 		if prepared.Promotion.VersionID == previous.ID {
 			return intent.ErrVersionPromotionStarted
 		}
-	}
-	if len(state.dependents[previous.ID]) > 0 {
-		return intent.ErrDependentVersionsNeedReconciliation
 	}
 	version := *record.Version
 	if version.ID == "" || version.ChangeID != previous.ChangeID || record.Amendment.ToVersion != version.ID || record.Amendment.Rationale == "" {
@@ -365,19 +390,21 @@ func validateCompletedPromotion(state *journalState, record journalRecord) error
 
 func newJournalState() journalState {
 	return journalState{
-		revisions:   make(map[intent.RevisionID]intent.Revision),
-		changes:     make(map[intent.ChangeID]intent.Change),
-		versions:    make(map[intent.VersionID]intent.Version),
-		versionIDs:  make(map[intent.ChangeID][]intent.VersionID),
-		dependents:  make(map[intent.VersionID][]intent.VersionID),
-		amendments:  make(map[intent.VersionID]intent.Amendment),
-		promotions:  make(map[intent.PromotionID]intent.Promotion),
-		prepared:    make(map[intent.PromotionID]intent.PreparedPromotion),
-		completed:   make(map[intent.VersionID]intent.PromotionID),
-		byIntent:    make(map[intent.RevisionID]intent.PromotionID),
-		conflicts:   make(map[intent.ConflictID]intent.ReconciliationConflict),
-		resolutions: make(map[intent.ConflictID]intent.ReconciliationResolution),
-		idempotency: make(map[string]idempotencyRecord),
+		revisions:       make(map[intent.RevisionID]intent.Revision),
+		changes:         make(map[intent.ChangeID]intent.Change),
+		versions:        make(map[intent.VersionID]intent.Version),
+		versionIDs:      make(map[intent.ChangeID][]intent.VersionID),
+		dependents:      make(map[intent.VersionID][]intent.VersionID),
+		amendments:      make(map[intent.VersionID]intent.Amendment),
+		reconciliations: make(map[intent.VersionID]intent.DependentReconciliation),
+		rebases:         make(map[intent.VersionID]intent.HeldVersionRebase),
+		promotions:      make(map[intent.PromotionID]intent.Promotion),
+		prepared:        make(map[intent.PromotionID]intent.PreparedPromotion),
+		completed:       make(map[intent.VersionID]intent.PromotionID),
+		byIntent:        make(map[intent.RevisionID]intent.PromotionID),
+		conflicts:       make(map[intent.ConflictID]intent.ReconciliationConflict),
+		resolutions:     make(map[intent.ConflictID]intent.ReconciliationResolution),
+		idempotency:     make(map[string]idempotencyRecord),
 	}
 }
 
@@ -408,6 +435,10 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			state.amendments[record.Version.ID] = *record.Amendment
 			state.idempotency[record.IdempotencyKey] = idempotencyRecord{operation: amendmentOperation, versionID: record.Version.ID}
 		}
+	case dependentReconciliationRecorded:
+		applyDependentReconciliation(state, record)
+	case heldVersionRebaseRecorded:
+		applyHeldVersionRebase(state, record)
 	case promotionPrepared:
 		if _, exists := state.promotions[record.Promotion.ID]; exists {
 			return
@@ -457,6 +488,7 @@ func sameReconciliationConflict(left, right intent.ReconciliationConflict) bool 
 		left.Change == right.Change &&
 		left.FromVersion == right.FromVersion &&
 		left.ToVersion == right.ToVersion &&
+		left.BaseIntent == right.BaseIntent &&
 		left.ReportedBy == right.ReportedBy &&
 		sameVersion(left.Version, right.Version) &&
 		slices.Equal(left.AffectedPaths, right.AffectedPaths)

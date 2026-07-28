@@ -55,7 +55,8 @@ func TestNativeIntentAPIRecordsAndReadsReconciliationConflict(t *testing.T) {
 	body := []byte(`{
 		"fromVersion":"` + string(original.Version.ID) + `",
 		"toVersion":"` + string(amended.Version.ID) + `",
-		"descendantVersion":"` + string(descendant.Version.ID) + `"
+		"descendantVersion":"` + string(descendant.Version.ID) + `",
+		"expectedIntent":"` + string(repository.CurrentIntent().ID) + `"
 	}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/reconciliation-conflicts", bytes.NewReader(body))
 	request.SetPathValue("repoID", "repo_123")
@@ -111,7 +112,12 @@ func TestNativeIntentAPIRecordsAndReadsReconciliationConflict(t *testing.T) {
 		t.Fatalf("loaded conflict = %#v, want %#v", loaded, recorded)
 	}
 
-	retry := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/reconciliation-conflicts", bytes.NewReader(body))
+	legacyBody := []byte(`{
+		"fromVersion":"` + string(original.Version.ID) + `",
+		"toVersion":"` + string(amended.Version.ID) + `",
+		"descendantVersion":"` + string(descendant.Version.ID) + `"
+	}`)
+	retry := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/reconciliation-conflicts", bytes.NewReader(legacyBody))
 	retry.SetPathValue("repoID", "repo_123")
 	retry.Header.Set("Content-Type", "application/json")
 	retry.Header.Set("Idempotency-Key", "conflict-b-c")
@@ -140,6 +146,7 @@ func TestNativeIntentAPIRecordsAndReadsReconciliationConflict(t *testing.T) {
 		FromVersion:       original.Version.ID,
 		ToVersion:         amended.Version.ID,
 		DescendantVersion: secondDescendant.Version.ID,
+		ExpectedIntent:    repository.CurrentIntent().ID,
 		ReportedBy:        "ion",
 	})
 	if err != nil {
@@ -262,6 +269,7 @@ type reconciliationConflictResponse struct {
 	} `json:"version"`
 	FromVersion   string   `json:"fromVersion"`
 	ToVersion     string   `json:"toVersion"`
+	BaseIntent    string   `json:"baseIntent"`
 	ReportedBy    string   `json:"reportedBy"`
 	AffectedPaths []string `json:"affectedPaths"`
 	Resolution    *struct {

@@ -69,6 +69,7 @@ func TestLedgerRestoresReconciliationResolutionAndExactRetry(t *testing.T) {
 		FromVersion:       original.Version.ID,
 		ToVersion:         amended.Version.ID,
 		DescendantVersion: descendant.Version.ID,
+		ExpectedIntent:    promoted.Intent.ID,
 		ReportedBy:        "ion",
 	})
 	if err != nil {

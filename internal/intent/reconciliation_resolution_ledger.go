@@ -87,7 +87,8 @@ func validateReconciliationResolutionRecord(ledger *transientLedger, resolution 
 	}
 	targetPromotionID, promoted := ledger.completed[conflict.ToVersion]
 	targetPromotion, found := ledger.promotions[targetPromotionID]
-	if !promoted || !found || targetPromotion.ToIntent != ledger.current.ID {
+	if !promoted || !found || conflict.BaseIntent != ledger.current.ID ||
+		!transientRevisionDescendsFrom(ledger, ledger.current.ID, targetPromotion.ToIntent) {
 		return ErrIntentAdvanced
 	}
 	if resolution.ID == "" || resolution.ToVersion != version.ID ||

@@ -13,15 +13,18 @@ import (
 const defaultReconciliationConflictPageSize = 50
 
 type reconciliationConflictResponse struct {
-	ID            string                            `json:"id"`
-	State         string                            `json:"state"`
-	Change        changeIdentityResponse            `json:"change"`
-	Version       versionResponse                   `json:"version"`
-	FromVersion   string                            `json:"fromVersion"`
-	ToVersion     string                            `json:"toVersion"`
-	ReportedBy    string                            `json:"reportedBy"`
-	AffectedPaths []string                          `json:"affectedPaths"`
-	Resolution    *reconciliationResolutionResponse `json:"resolution,omitempty"`
+	ID                   string                                      `json:"id"`
+	State                string                                      `json:"state"`
+	Change               changeIdentityResponse                      `json:"change"`
+	Version              versionResponse                             `json:"version"`
+	FromVersion          string                                      `json:"fromVersion"`
+	ToVersion            string                                      `json:"toVersion"`
+	BaseIntent           string                                      `json:"baseIntent"`
+	ReportedBy           string                                      `json:"reportedBy"`
+	AffectedPaths        []string                                    `json:"affectedPaths"`
+	Resolution           *reconciliationResolutionResponse           `json:"resolution,omitempty"`
+	EffectiveVersion     *versionResponse                            `json:"effectiveVersion,omitempty"`
+	EffectiveTransitions []effectiveReconciliationTransitionResponse `json:"effectiveTransitions,omitempty"`
 }
 
 type reconciliationResolutionResponse struct {
@@ -33,11 +36,21 @@ type reconciliationResolutionResponse struct {
 	Rationale   string `json:"rationale"`
 }
 
+type effectiveReconciliationTransitionResponse struct {
+	Kind        string `json:"kind"`
+	FromVersion string `json:"fromVersion"`
+	ToVersion   string `json:"toVersion"`
+	FromIntent  string `json:"fromIntent"`
+	ToIntent    string `json:"toIntent"`
+	Rationale   string `json:"rationale"`
+}
+
 func recordReconciliationConflictHandler(service *intentservice.Service) http.Handler {
 	type requestBody struct {
 		FromVersion       string   `json:"fromVersion"`
 		ToVersion         string   `json:"toVersion"`
 		DescendantVersion string   `json:"descendantVersion"`
+		ExpectedIntent    string   `json:"expectedIntent"`
 		AffectedPaths     []string `json:"affectedPaths"`
 	}
 
@@ -55,6 +68,7 @@ func recordReconciliationConflictHandler(service *intentservice.Service) http.Ha
 		body.FromVersion = strings.TrimSpace(body.FromVersion)
 		body.ToVersion = strings.TrimSpace(body.ToVersion)
 		body.DescendantVersion = strings.TrimSpace(body.DescendantVersion)
+		body.ExpectedIntent = strings.TrimSpace(body.ExpectedIntent)
 		if body.FromVersion == "" || body.ToVersion == "" || body.DescendantVersion == "" {
 			writeError(w, http.StatusBadRequest, "fromVersion, toVersion, and descendantVersion are required")
 			return
@@ -68,6 +82,7 @@ func recordReconciliationConflictHandler(service *intentservice.Service) http.Ha
 			FromVersion:       intent.VersionID(body.FromVersion),
 			ToVersion:         intent.VersionID(body.ToVersion),
 			DescendantVersion: intent.VersionID(body.DescendantVersion),
+			ExpectedIntent:    intent.RevisionID(body.ExpectedIntent),
 			ReportedBy:        authenticatedProducer(r),
 			AffectedPaths:     body.AffectedPaths,
 		})
@@ -182,11 +197,11 @@ func mapReconciliationConflict(conflict intent.ReconciliationConflictInspection)
 		Version:       mapVersion(conflict.Version),
 		FromVersion:   string(conflict.FromVersion),
 		ToVersion:     string(conflict.ToVersion),
+		BaseIntent:    string(conflict.BaseIntent),
 		ReportedBy:    conflict.ReportedBy,
 		AffectedPaths: conflict.AffectedPaths,
 	}
 	if conflict.Resolution != nil {
-		response.State = "resolved"
 		response.Resolution = &reconciliationResolutionResponse{
 			ID:          string(conflict.Resolution.ID),
 			FromVersion: string(conflict.Resolution.FromVersion),
@@ -195,6 +210,31 @@ func mapReconciliationConflict(conflict intent.ReconciliationConflictInspection)
 			ResolvedBy:  conflict.Resolution.ResolvedBy,
 			Rationale:   conflict.Resolution.Rationale,
 		}
+		response.State = "resolved"
+	}
+	if conflict.EffectiveVersion != nil {
+		effective := mapVersion(*conflict.EffectiveVersion)
+		response.EffectiveVersion = &effective
+	}
+	if len(conflict.EffectiveTransitions) > 0 {
+		response.EffectiveTransitions = make(
+			[]effectiveReconciliationTransitionResponse,
+			0,
+			len(conflict.EffectiveTransitions),
+		)
+		for _, transition := range conflict.EffectiveTransitions {
+			response.EffectiveTransitions = append(response.EffectiveTransitions, effectiveReconciliationTransitionResponse{
+				Kind:        string(transition.Kind),
+				FromVersion: string(transition.FromVersion),
+				ToVersion:   string(transition.ToVersion),
+				FromIntent:  string(transition.FromIntent),
+				ToIntent:    string(transition.ToIntent),
+				Rationale:   transition.Rationale,
+			})
+		}
+	}
+	if conflict.Superseded {
+		response.State = "superseded"
 	}
 	return response
 }

@@ -78,12 +78,16 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 	if err := requireSubmittedAncestor(ctx, workdir, state.ParentRevision, head); err != nil {
 		return err
 	}
-	targetRevision := change.LatestVersion.ContentRef.Revision
 	current, err := client.currentIntent(ctx, origin)
 	if err != nil {
 		return err
 	}
-	if current.ID != change.LatestPromotion.ToIntent || current.ContentRef.Engine != "git" || current.ContentRef.Revision != targetRevision {
+	if current.ContentRef.Engine != "git" || current.ContentRef.Revision == "" {
+		return errors.New("accepted intent is not represented by Git content")
+	}
+	targetRevision := current.ContentRef.Revision
+	if current.ID == change.LatestPromotion.ToIntent &&
+		targetRevision != change.LatestVersion.ContentRef.Revision {
 		return errors.New("accepted intent does not match the amended change")
 	}
 
@@ -144,10 +148,14 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 				state.ParentVersion,
 				change.LatestVersion.ID,
 				descendant.Version.ID,
+				current.ID,
 				affectedPaths,
 			)
 			if err != nil {
 				return err
+			}
+			if conflict.BaseIntent != current.ID {
+				return errors.New("server recorded reconciliation conflict against a different intent")
 			}
 			if err := validateReconciliationConflict(conflict, state, change.LatestVersion.ID, descendant.Version.ID, head); err != nil {
 				return err
@@ -156,7 +164,7 @@ func (client Client) reconcileAmendedParent(ctx context.Context, workdir string,
 			if err := rememberContinuationState(ctx, workdir, origin.repoID, state); err != nil {
 				return err
 			}
-			if conflict.State == "resolved" {
+			if conflict.State == "resolved" || conflict.State == "superseded" {
 				return client.reconcileConflictResolution(ctx, workdir, origin, state, change, head)
 			}
 			fmt.Fprintf(client.Stdout, "Sync needs judgement: %s\n", state.ParentTitle)

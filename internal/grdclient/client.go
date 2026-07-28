@@ -165,6 +165,7 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 	parentRelationship := "judgement pending"
 	pendingAmendmentRationale := ""
 	var pendingReconciliation *reconciliationConflictResponse
+	supersededReconciliation := false
 	resolvedReconciliationRationale := ""
 	resolvedReconciliationStatus := ""
 	if found {
@@ -214,6 +215,13 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 			switch conflict.State {
 			case "awaiting_judgement":
 				pendingReconciliation = &conflict
+			case "superseded":
+				if conflict.Resolution == nil {
+					supersededReconciliation = true
+					break
+				}
+				resolvedReconciliationRationale = conflict.Resolution.Rationale
+				resolvedReconciliationStatus = "resolution superseded; repository rebase pending"
 			case "resolved":
 				resolvedChange, err := client.change(ctx, origin, conflict.Change.ID)
 				if err != nil {
@@ -227,8 +235,10 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 					resolvedReconciliationStatus = "resolution awaiting judgement"
 					break
 				}
-				if current.ID != resolvedChange.LatestPromotion.ToIntent ||
-					current.ContentRef.Engine != "git" ||
+				if current.ContentRef.Engine != "git" || current.ContentRef.Revision == "" {
+					return errors.New("accepted intent does not match the reconciliation resolution")
+				}
+				if current.ID == resolvedChange.LatestPromotion.ToIntent &&
 					current.ContentRef.Revision != resolvedChange.LatestVersion.ContentRef.Revision {
 					return errors.New("accepted intent does not match the reconciliation resolution")
 				}
@@ -294,6 +304,9 @@ func (client Client) Status(ctx context.Context, workdir string) error {
 				fmt.Fprintf(client.Stdout, "  %s\n", path)
 			}
 		}
+	}
+	if supersededReconciliation {
+		fmt.Fprintln(client.Stdout, "Reconciliation: superseded by newer accepted intent; run grd sync")
 	}
 	if resolvedReconciliationRationale != "" {
 		fmt.Fprintf(client.Stdout, "Reconciliation: %s\n", resolvedReconciliationStatus)

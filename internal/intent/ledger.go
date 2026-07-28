@@ -29,6 +29,19 @@ type AmendmentStore interface {
 	RecordAmendment(ctx context.Context, key string, amendment Amendment, version Version) error
 }
 
+type DependentReconciliationStore interface {
+	DependentReconciliation(ctx context.Context, toVersion VersionID) (DependentReconciliation, bool, error)
+	DependentReconciliations(ctx context.Context, after VersionID, limit int) ([]DependentReconciliation, bool, error)
+	DependentReconciliationByIdempotencyKey(ctx context.Context, key string) (ReconciledDependent, bool, error)
+	RecordDependentReconciliation(ctx context.Context, key string, reconciliation DependentReconciliation, version Version) error
+}
+
+type HeldVersionRebaseStore interface {
+	HeldVersionRebase(ctx context.Context, toVersion VersionID) (HeldVersionRebase, bool, error)
+	HeldVersionRebaseByIdempotencyKey(ctx context.Context, key string) (RebasedHeldVersion, bool, error)
+	RecordHeldVersionRebase(ctx context.Context, key string, rebase HeldVersionRebase, version Version) error
+}
+
 type PromotionJournal interface {
 	PendingPromotion(ctx context.Context) (PreparedPromotion, bool, error)
 	CompletedPromotion(ctx context.Context, versionID VersionID) (Promoted, bool, error)
@@ -51,28 +64,33 @@ type Ledger interface {
 	IntentStore
 	ChangeStore
 	AmendmentStore
+	DependentReconciliationStore
+	HeldVersionRebaseStore
 	PromotionJournal
 	ReconciliationConflictStore
 }
 
 type transientLedger struct {
-	mu          sync.RWMutex
-	current     Revision
-	revisions   map[RevisionID]Revision
-	changes     map[ChangeID]Change
-	versions    map[VersionID]Version
-	versionIDs  map[ChangeID][]VersionID
-	dependents  map[VersionID][]VersionID
-	amendments  map[VersionID]Amendment
-	promotions  map[PromotionID]Promotion
-	prepared    map[PromotionID]PreparedPromotion
-	pending     PromotionID
-	completed   map[VersionID]PromotionID
-	byIntent    map[RevisionID]PromotionID
-	conflicts   map[ConflictID]ReconciliationConflict
-	conflictIDs []ConflictID
-	resolutions map[ConflictID]ReconciliationResolution
-	idempotency map[string]transientIdempotencyRecord
+	mu                sync.RWMutex
+	current           Revision
+	revisions         map[RevisionID]Revision
+	changes           map[ChangeID]Change
+	versions          map[VersionID]Version
+	versionIDs        map[ChangeID][]VersionID
+	dependents        map[VersionID][]VersionID
+	amendments        map[VersionID]Amendment
+	reconciliations   map[VersionID]DependentReconciliation
+	reconciliationIDs []VersionID
+	rebases           map[VersionID]HeldVersionRebase
+	promotions        map[PromotionID]Promotion
+	prepared          map[PromotionID]PreparedPromotion
+	pending           PromotionID
+	completed         map[VersionID]PromotionID
+	byIntent          map[RevisionID]PromotionID
+	conflicts         map[ConflictID]ReconciliationConflict
+	conflictIDs       []ConflictID
+	resolutions       map[ConflictID]ReconciliationResolution
+	idempotency       map[string]transientIdempotencyRecord
 }
 
 type transientIdempotencyOperation uint8
@@ -80,6 +98,8 @@ type transientIdempotencyOperation uint8
 const (
 	transientProposalOperation transientIdempotencyOperation = iota + 1
 	transientAmendmentOperation
+	transientDependentReconciliationOperation
+	transientHeldVersionRebaseOperation
 	transientReconciliationConflictOperation
 	transientReconciliationResolutionOperation
 )
@@ -243,6 +263,8 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.versionIDs = make(map[ChangeID][]VersionID)
 	ledger.dependents = make(map[VersionID][]VersionID)
 	ledger.amendments = make(map[VersionID]Amendment)
+	ledger.reconciliations = make(map[VersionID]DependentReconciliation)
+	ledger.rebases = make(map[VersionID]HeldVersionRebase)
 	ledger.promotions = make(map[PromotionID]Promotion)
 	ledger.prepared = make(map[PromotionID]PreparedPromotion)
 	ledger.completed = make(map[VersionID]PromotionID)
@@ -325,9 +347,6 @@ func (ledger *transientLedger) RecordAmendment(_ context.Context, key string, am
 	ids := ledger.versionIDs[previous.ChangeID]
 	if len(ids) == 0 || ids[len(ids)-1] != previous.ID {
 		return ErrVersionAdvanced
-	}
-	if len(ledger.dependents[previous.ID]) > 0 {
-		return ErrDependentVersionsNeedReconciliation
 	}
 	if _, promoted := ledger.completed[previous.ID]; promoted {
 		return ErrVersionPromotionStarted

@@ -16,6 +16,8 @@ type Repository interface {
 	CurrentIntent() intent.Revision
 	Propose(ctx context.Context, proposal intent.Proposal) (intent.Proposed, error)
 	Amend(ctx context.Context, request intent.AmendRequest) (intent.Amended, error)
+	ReconcileDependent(ctx context.Context, request intent.ReconcileDependentRequest) (intent.ReconciledDependent, error)
+	RebaseHeldVersion(ctx context.Context, request intent.RebaseHeldVersionRequest) (intent.RebasedHeldVersion, error)
 	Promote(ctx context.Context, request intent.PromoteRequest) (intent.Promoted, error)
 	Promotion(ctx context.Context, versionID intent.VersionID) (intent.Promoted, bool, error)
 	ReadyDependents(ctx context.Context) ([]intent.Proposed, error)
@@ -81,11 +83,42 @@ type AmendmentReceipt struct {
 	Promotion *intent.Promoted
 }
 
+type DependentReconciliationRequest struct {
+	IdempotencyKey     string
+	ExpectedVersion    intent.VersionID
+	ReplacedDependency intent.VersionID
+	AcceptedVersion    intent.VersionID
+	ExpectedIntent     intent.RevisionID
+	Content            intent.ContentRef
+	Producer           string
+	Rationale          string
+}
+
+type DependentReconciliationReceipt struct {
+	Reconciled intent.ReconciledDependent
+	Promotion  *intent.Promoted
+}
+
+type HeldVersionRebaseRequest struct {
+	IdempotencyKey  string
+	ExpectedVersion intent.VersionID
+	ExpectedIntent  intent.RevisionID
+	Content         intent.ContentRef
+	Producer        string
+	Rationale       string
+}
+
+type HeldVersionRebaseReceipt struct {
+	Rebased   intent.RebasedHeldVersion
+	Promotion *intent.Promoted
+}
+
 type ReconciliationConflictRequest struct {
 	IdempotencyKey    string
 	FromVersion       intent.VersionID
 	ToVersion         intent.VersionID
 	DescendantVersion intent.VersionID
+	ExpectedIntent    intent.RevisionID
 	ReportedBy        string
 	AffectedPaths     []string
 }
@@ -205,6 +238,92 @@ func (service *Service) Amend(ctx context.Context, repoID string, amendment Amen
 	return receipt, nil
 }
 
+func (service *Service) ReconcileDependent(
+	ctx context.Context,
+	repoID string,
+	request DependentReconciliationRequest,
+) (DependentReconciliationReceipt, error) {
+	producer := strings.TrimSpace(request.Producer)
+	rationale := strings.TrimSpace(request.Rationale)
+	if producer == "" || rationale == "" {
+		return DependentReconciliationReceipt{}, errors.New("dependent reconciliation producer and rationale are required")
+	}
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return DependentReconciliationReceipt{}, err
+	}
+	reconciled, err := repository.ReconcileDependent(ctx, intent.ReconcileDependentRequest{
+		IdempotencyKey:     request.IdempotencyKey,
+		ExpectedVersion:    request.ExpectedVersion,
+		ReplacedDependency: request.ReplacedDependency,
+		AcceptedVersion:    request.AcceptedVersion,
+		ExpectedIntent:     request.ExpectedIntent,
+		Content:            request.Content,
+		Producer:           producer,
+		Rationale:          rationale,
+	})
+	if err != nil {
+		return DependentReconciliationReceipt{}, err
+	}
+	receipt := DependentReconciliationReceipt{Reconciled: reconciled}
+	promoted, err := service.decideAndPromote(ctx, repository, JudgementSubject{
+		Change:  reconciled.Change,
+		Version: reconciled.Version,
+	})
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Promotion = promoted
+	if promoted != nil {
+		if err := service.reconsiderReady(ctx, repository); err != nil {
+			return receipt, fmt.Errorf("reconsider dependents after dependent reconciliation promotion: %w", err)
+		}
+	}
+	return receipt, nil
+}
+
+func (service *Service) RebaseHeldVersion(
+	ctx context.Context,
+	repoID string,
+	request HeldVersionRebaseRequest,
+) (HeldVersionRebaseReceipt, error) {
+	producer := strings.TrimSpace(request.Producer)
+	rationale := strings.TrimSpace(request.Rationale)
+	if producer == "" || rationale == "" {
+		return HeldVersionRebaseReceipt{}, errors.New("held version rebase producer and rationale are required")
+	}
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return HeldVersionRebaseReceipt{}, err
+	}
+	rebased, err := repository.RebaseHeldVersion(ctx, intent.RebaseHeldVersionRequest{
+		IdempotencyKey:  request.IdempotencyKey,
+		ExpectedVersion: request.ExpectedVersion,
+		ExpectedIntent:  request.ExpectedIntent,
+		Content:         request.Content,
+		Producer:        producer,
+		Rationale:       rationale,
+	})
+	if err != nil {
+		return HeldVersionRebaseReceipt{}, err
+	}
+	receipt := HeldVersionRebaseReceipt{Rebased: rebased}
+	promoted, err := service.decideAndPromote(ctx, repository, JudgementSubject{
+		Change:  rebased.Change,
+		Version: rebased.Version,
+	})
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Promotion = promoted
+	if promoted != nil {
+		if err := service.reconsiderReady(ctx, repository); err != nil {
+			return receipt, fmt.Errorf("reconsider dependents after held version rebase promotion: %w", err)
+		}
+	}
+	return receipt, nil
+}
+
 func (service *Service) InspectChange(ctx context.Context, repoID string, changeID intent.ChangeID) (intent.ChangeInspection, error) {
 	repository, err := service.resolve(ctx, repoID)
 	if err != nil {
@@ -218,11 +337,23 @@ func (service *Service) RecordReconciliationConflict(ctx context.Context, repoID
 	if err != nil {
 		return intent.ReconciliationConflictInspection{}, err
 	}
+	expectedIntent := request.ExpectedIntent
+	if expectedIntent == "" {
+		promoted, found, err := repository.Promotion(ctx, request.ToVersion)
+		if err != nil {
+			return intent.ReconciliationConflictInspection{}, err
+		}
+		if !found {
+			return intent.ReconciliationConflictInspection{}, intent.ErrVersionNotPromoted
+		}
+		expectedIntent = promoted.Intent.ID
+	}
 	return repository.RecordReconciliationConflict(ctx, intent.ReconciliationConflictRequest{
 		IdempotencyKey:    request.IdempotencyKey,
 		FromVersion:       request.FromVersion,
 		ToVersion:         request.ToVersion,
 		DescendantVersion: request.DescendantVersion,
+		ExpectedIntent:    expectedIntent,
 		ReportedBy:        strings.TrimSpace(request.ReportedBy),
 		AffectedPaths:     request.AffectedPaths,
 	})

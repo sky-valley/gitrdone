@@ -104,6 +104,7 @@ func TestReconciliationResolutionPromotesRealGitContentAndSurvivesRegistryRestar
 		FromVersion:       original.Version.ID,
 		ToVersion:         amended.Version.ID,
 		DescendantVersion: descendant.Version.ID,
+		ExpectedIntent:    repository.CurrentIntent().ID,
 		ReportedBy:        "ion",
 		AffectedPaths:     []string{"feature.txt"},
 	})

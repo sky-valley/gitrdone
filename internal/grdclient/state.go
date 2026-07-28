@@ -117,8 +117,8 @@ func reconciliationDescendantIdempotencyKey(repoID, fromVersion, toVersion, desc
 	return reconciliationIdempotencyKey("descendant", repoID, fromVersion, toVersion, descendantRevision)
 }
 
-func reconciliationConflictIdempotencyKey(repoID, fromVersion, toVersion, descendantVersion string) string {
-	return reconciliationIdempotencyKey("record", repoID, fromVersion, toVersion, descendantVersion)
+func reconciliationConflictIdempotencyKey(repoID, fromVersion, toVersion, descendantVersion, expectedIntent string) string {
+	return reconciliationIdempotencyKey("record", repoID, fromVersion, toVersion, descendantVersion+"\x00"+expectedIntent)
 }
 
 func reconciliationIdempotencyKey(operation, repoID, fromVersion, toVersion, descendant string) string {

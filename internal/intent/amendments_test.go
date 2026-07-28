@@ -287,7 +287,7 @@ func TestRepositoryAmendmentRequiresTheExpectedLatestVersion(t *testing.T) {
 	}
 }
 
-func TestRepositoryAmendmentRefusesToStrandAdmittedDependents(t *testing.T) {
+func TestRepositoryAmendmentExposesAdmittedDependentsForReconciliationAfterPromotion(t *testing.T) {
 	ctx := context.Background()
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
 	repository, err := intent.NewRepository(initialContent, &recordingAdmission{}, &recordingProjection{current: initialContent})
@@ -303,17 +303,18 @@ func TestRepositoryAmendmentRefusesToStrandAdmittedDependents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("propose original: %v", err)
 	}
-	if _, err := repository.Propose(ctx, intent.Proposal{
+	dependent, err := repository.Propose(ctx, intent.Proposal{
 		IdempotencyKey: "proposal-c",
 		BaseIntent:     repository.CurrentIntent().ID,
 		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
 		Producer:       "ion",
 		Dependencies:   []intent.VersionID{original.Version.ID},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("propose dependent: %v", err)
 	}
 
-	_, err = repository.Amend(ctx, intent.AmendRequest{
+	amended, err := repository.Amend(ctx, intent.AmendRequest{
 		IdempotencyKey:  "amend-b",
 		ChangeID:        original.Change.ID,
 		ExpectedVersion: original.Version.ID,
@@ -321,14 +322,50 @@ func TestRepositoryAmendmentRefusesToStrandAdmittedDependents(t *testing.T) {
 		Producer:        "repository",
 		Rationale:       "repair B",
 	})
-	if !errors.Is(err, intent.ErrDependentVersionsNeedReconciliation) {
-		t.Fatalf("amendment error = %v, want ErrDependentVersionsNeedReconciliation", err)
-	}
-	page, err := repository.Versions(ctx, intent.VersionQuery{ChangeID: original.Change.ID, Limit: 10})
 	if err != nil {
-		t.Fatalf("read original versions: %v", err)
+		t.Fatalf("amend parent with dependent: %v", err)
 	}
-	if len(page.Versions) != 1 || page.Versions[0].ID != original.Version.ID {
-		t.Fatalf("original versions = %#v, want no stranded amendment", page.Versions)
+	parentPromotion, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      amended.Version.ID,
+		ExpectedIntent: repository.CurrentIntent().ID,
+	})
+	if err != nil {
+		t.Fatalf("promote amended parent: %v", err)
+	}
+	independent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-d",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "dddddddd"},
+		Producer:       "noam",
+	})
+	if err != nil {
+		t.Fatalf("propose independent change: %v", err)
+	}
+	if _, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      independent.Version.ID,
+		ExpectedIntent: repository.CurrentIntent().ID,
+	}); err != nil {
+		t.Fatalf("promote independent change: %v", err)
+	}
+
+	candidates, err := repository.DependentReconciliations(ctx)
+	if err != nil {
+		t.Fatalf("read dependent reconciliations: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("dependent reconciliations = %#v, want one candidate", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.ReplacedDependency != original.Version.ID ||
+		candidate.AcceptedVersion != amended.Version.ID ||
+		candidate.AcceptedAtIntent != parentPromotion.Intent.ID ||
+		candidate.Dependent.Change.ID != dependent.Change.ID ||
+		candidate.Dependent.Version.ID != dependent.Version.ID {
+		t.Fatalf("dependent reconciliation = %#v, want B -> B prime with admitted C", candidate)
+	}
+	if inspection, err := repository.InspectChange(ctx, dependent.Change.ID); err != nil {
+		t.Fatalf("inspect dependent: %v", err)
+	} else if inspection.LatestVersion.ID != dependent.Version.ID || inspection.LatestPromotion != nil {
+		t.Fatalf("dependent changed before reconciliation: %#v", inspection)
 	}
 }

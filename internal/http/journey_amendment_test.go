@@ -212,6 +212,7 @@ func TestJourneyConflictingReplayPreservesTheOriginalWorkspace(t *testing.T) {
 		} `json:"version"`
 		FromVersion   string   `json:"fromVersion"`
 		ToVersion     string   `json:"toVersion"`
+		BaseIntent    string   `json:"baseIntent"`
 		ReportedBy    string   `json:"reportedBy"`
 		AffectedPaths []string `json:"affectedPaths"`
 	}
@@ -415,6 +416,90 @@ func TestJourneyResolvedConflictReplaysNewerLocalWorkOntoAcceptedResolution(t *t
 	}
 }
 
+func TestJourneySupersededConflictReentersReconciliationAgainstCurrentIntent(t *testing.T) {
+	journey := stageConflictingReconciliationJourney(t)
+	current := journey.world.currentIntent()
+	advancedRevision := journey.repositoryAgent.commitFile("unrelated.txt", "later intent\n", "advance unrelated intent")
+	requireGitSuccess(
+		t,
+		"publish later intent",
+		"-C",
+		journey.repositoryAgent.path,
+		"push",
+		"origin",
+		"HEAD:refs/candidates/later-intent",
+	)
+	advanced, err := journey.world.server.judgement.Propose(context.Background(), journey.world.server.repo.ID, intentservice.Proposal{
+		IdempotencyKey: "journey-later-intent",
+		BaseIntent:     intent.RevisionID(current.ID),
+		Content:        intent.ContentRef{Engine: "git", Revision: advancedRevision},
+		Producer:       "noam",
+	})
+	if err != nil {
+		t.Fatalf("advance accepted intent: %v", err)
+	}
+	if advanced.Promotion == nil {
+		t.Fatal("later intent was not promoted")
+	}
+
+	res, body := request(
+		t,
+		journey.world.server.handler,
+		http.MethodGet,
+		"/v1/repos/"+journey.world.server.repo.ID+"/reconciliation-conflicts/"+journey.conflictID,
+		controlAuthorization,
+		"",
+		"",
+	)
+	requireStatus(t, res, body, http.StatusOK)
+	var stale struct {
+		State string `json:"state"`
+	}
+	decodeJSON(t, res, body, &stale)
+	if stale.State != "superseded" {
+		t.Fatalf("old conflict state = %q, want superseded", stale.State)
+	}
+	status := journey.ion.run(journey.grd, "status")
+	if status.err != nil {
+		t.Fatalf("status with superseded conflict: %v\n%s", status.err, status.stderr)
+	}
+	if !strings.Contains(status.stdout, "Reconciliation: superseded by newer accepted intent; run grd sync\n") {
+		t.Fatalf("status with superseded conflict = %q, want actionable sync guidance", status.stdout)
+	}
+
+	sync := journey.ion.run(journey.grd, "sync")
+	if sync.err == nil || sync.stderr != "grd sync: reconciliation conflict is awaiting judgement\n" {
+		t.Fatalf("sync after intent advance = (%v, %q, %q), want a fresh durable conflict", sync.err, sync.stdout, sync.stderr)
+	}
+	if got := journey.ion.head(); got != journey.capturedRevision {
+		t.Fatalf("fresh reconciliation attempt moved workspace to %q, want restored %q", got, journey.capturedRevision)
+	}
+	res, body = request(
+		t,
+		journey.world.server.handler,
+		http.MethodGet,
+		"/v1/repos/"+journey.world.server.repo.ID+"/reconciliation-conflicts?limit=10",
+		controlAuthorization,
+		"",
+		"",
+	)
+	requireStatus(t, res, body, http.StatusOK)
+	var page struct {
+		Conflicts []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"conflicts"`
+	}
+	decodeJSON(t, res, body, &page)
+	if len(page.Conflicts) != 2 ||
+		page.Conflicts[0].ID != journey.conflictID ||
+		page.Conflicts[0].State != "superseded" ||
+		page.Conflicts[1].ID == journey.conflictID ||
+		page.Conflicts[1].State != "awaiting_judgement" {
+		t.Fatalf("conflicts after re-entry = %#v, want superseded attempt then fresh awaiting attempt", page.Conflicts)
+	}
+}
+
 func TestJourneyResolvedConflictRestoresNewerWorkWhenReplayStillConflicts(t *testing.T) {
 	journey := stageConflictingReconciliationJourney(t)
 	newerRevision := journey.ion.commitFile("feature.txt", "Ion revised the feature again\n", "keep changing conflicted code")
@@ -489,6 +574,112 @@ func TestJourneyResolvedConflictWaitsForResolutionJudgementBeforePortalSync(t *t
 	if got := journey.world.currentIntent().ContentRef.Revision; got == resolvedRevision {
 		t.Fatalf("pending resolution moved accepted intent to unpromoted C prime %q", got)
 	}
+}
+
+func TestJourneyDeferredResolutionFollowsEffectiveRebaseWhenIntentAdvances(t *testing.T) {
+	decider := &deferResolutionPromotionDecider{}
+	journey := stageConflictingReconciliationJourneyWithDecider(t, decider)
+	resolvedRevision := journey.repositoryAgent.commitFile("feature.txt", "combined repository and Ion fix\n", "resolve competing feature edits")
+	requireGitSuccess(t, "publish resolved content", "-C", journey.repositoryAgent.path, "push", "origin", "HEAD:refs/candidates/resolution")
+	resolved := resolveJourneyConflict(
+		t,
+		journey.world,
+		journey.conflictID,
+		journey.conflictVersion,
+		journey.amended.Promotion.Intent.ID,
+		resolvedRevision,
+		"combined Ion's captured intent with the repository repair",
+	)
+	if resolved.Promotion != nil {
+		t.Fatalf("resolution promotion = %#v, want judgement pending", resolved.Promotion)
+	}
+
+	advancer := journey.world.cloneWorkspace("advancer")
+	advancedRevision := advancer.commitFile("unrelated.txt", "later intent\n", "advance unrelated intent")
+	requireGitSuccess(t, "publish later intent", "-C", advancer.path, "push", "origin", "HEAD:refs/candidates/later-intent")
+	current := journey.world.currentIntent()
+	advanced, err := journey.world.server.judgement.Propose(context.Background(), journey.world.server.repo.ID, intentservice.Proposal{
+		IdempotencyKey: "journey-later-intent-after-resolution",
+		BaseIntent:     intent.RevisionID(current.ID),
+		Content:        intent.ContentRef{Engine: "git", Revision: advancedRevision},
+		Producer:       "noam",
+	})
+	if err != nil {
+		t.Fatalf("advance accepted intent: %v", err)
+	}
+	if advanced.Promotion == nil {
+		t.Fatal("later intent was not promoted")
+	}
+
+	status := journey.ion.run(journey.grd, "status")
+	if status.err != nil {
+		t.Fatalf("status with stale deferred resolution: %v\n%s", status.err, status.stderr)
+	}
+	if !strings.Contains(status.stdout, "Reconciliation: resolution superseded; repository rebase pending\n") {
+		t.Fatalf("status with stale deferred resolution = %q, want repository rebase pending", status.stdout)
+	}
+	syncResult := journey.ion.run(journey.grd, "sync")
+	if syncResult.err == nil || syncResult.stderr != "grd sync: reconciliation resolution requires repository rebase\n" {
+		t.Fatalf("sync after deferred resolution became stale = (%v, %q, %q), want honest wait", syncResult.err, syncResult.stdout, syncResult.stderr)
+	}
+
+	rebaseEngine := journey.world.cloneWorkspace("rebase-engine")
+	requireGitSuccess(t, "fetch resolved candidate", "-C", rebaseEngine.path, "fetch", "origin", "refs/candidates/resolution")
+	requireGitSuccess(t, "rebase resolved content onto later intent", "-C", rebaseEngine.path, "cherry-pick", resolvedRevision)
+	effectiveRevision := rebaseEngine.head()
+	requireGitSuccess(t, "publish effective resolution", "-C", rebaseEngine.path, "push", "origin", "HEAD:refs/candidates/effective-resolution")
+	rebased, err := journey.world.server.judgement.RebaseHeldVersion(
+		context.Background(),
+		journey.world.server.repo.ID,
+		intentservice.HeldVersionRebaseRequest{
+			IdempotencyKey:  "journey-rebase-held-resolution",
+			ExpectedVersion: resolved.Resolved.Version.ID,
+			ExpectedIntent:  advanced.Promotion.Intent.ID,
+			Content:         intent.ContentRef{Engine: "git", Revision: effectiveRevision},
+			Producer:        "rebase-engine",
+			Rationale:       "replay resolved change onto later accepted intent",
+		},
+	)
+	if err != nil {
+		t.Fatalf("record effective resolution rebase: %v", err)
+	}
+	if rebased.Promotion != nil {
+		t.Fatalf("effective resolution rebase promotion = %#v, want judgement pending before final amendment", rebased.Promotion)
+	}
+	finalRevision := rebaseEngine.commitFile("feature.txt", "combined repository and Ion fix, linted\n", "finish effective resolution")
+	requireGitSuccess(t, "publish amended effective resolution", "-C", rebaseEngine.path, "push", "origin", "HEAD:refs/candidates/final-effective-resolution")
+	final, err := journey.world.server.judgement.Amend(
+		context.Background(),
+		journey.world.server.repo.ID,
+		intentservice.AmendmentRequest{
+			IdempotencyKey:  "journey-amend-effective-resolution",
+			ChangeID:        rebased.Rebased.Change.ID,
+			ExpectedVersion: rebased.Rebased.Version.ID,
+			Content:         intent.ContentRef{Engine: "git", Revision: finalRevision},
+			Producer:        "final-fix-engine",
+			Rationale:       "finish the rebased resolution",
+		},
+	)
+	if err != nil {
+		t.Fatalf("amend effective resolution: %v", err)
+	}
+	if final.Promotion == nil || final.Promotion.Promotion.VersionID != final.Amended.Version.ID {
+		t.Fatalf("amended effective resolution promotion = %#v, want ordinary judgement to accept final version", final.Promotion)
+	}
+
+	status = journey.ion.run(journey.grd, "status")
+	if status.err != nil || !strings.Contains(status.stdout, "Reconciliation: resolved; run grd sync\n") {
+		t.Fatalf("status with accepted effective resolution = (%v, %q, %q), want portal ready", status.err, status.stdout, status.stderr)
+	}
+	syncResult = journey.ion.run(journey.grd, "sync")
+	if syncResult.err != nil {
+		t.Fatalf("sync accepted effective resolution: %v\nstdout:\n%sstderr:\n%s", syncResult.err, syncResult.stdout, syncResult.stderr)
+	}
+	if got := journey.ion.head(); got != finalRevision {
+		t.Fatalf("effective resolution sync head = %q, want %q", got, finalRevision)
+	}
+	assertFileContent(t, journey.ion.path+"/feature.txt", "combined repository and Ion fix, linted\n")
+	assertFileContent(t, journey.ion.path+"/unrelated.txt", "later intent\n")
 }
 
 func TestJourneyResolvedConflictRefusesToFlattenNewerMergeHistory(t *testing.T) {
@@ -694,6 +885,12 @@ func (decider *deferResolutionPromotionDecider) DecidePromotion(_ context.Contex
 	decider.proposed = append(decider.proposed, proposed)
 	if proposed.Version.Producer == "ion" {
 		return intentservice.DeferPromotion, nil
+	}
+	if proposed.Version.Producer == "rebase-engine" {
+		return intentservice.DeferPromotion, nil
+	}
+	if proposed.Version.Producer != "repository-agent" {
+		return intentservice.PromoteNow, nil
 	}
 	decider.repositoryAgentDecisions++
 	if decider.repositoryAgentDecisions > 1 {

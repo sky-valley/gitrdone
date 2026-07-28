@@ -123,6 +123,206 @@ func TestServiceAmendmentUsesOrdinaryJudgementAndPromotion(t *testing.T) {
 	}
 }
 
+func TestServiceAcceptsParentAmendmentWithoutPromotingDependentOnSupersededVersion(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, acceptingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	parent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-b",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose parent: %v", err)
+	}
+	dependent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-c",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
+		Dependencies:   []intent.VersionID{parent.Version.ID},
+	})
+	if err != nil {
+		t.Fatalf("propose dependent: %v", err)
+	}
+	service := intentservice.New(staticResolver{repository: repository})
+
+	amended, err := service.Amend(ctx, "repo_123", intentservice.AmendmentRequest{
+		IdempotencyKey:  "amend-b",
+		ChangeID:        parent.Change.ID,
+		ExpectedVersion: parent.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "b2b2b2b2"},
+		Producer:        "repository-agent",
+		Rationale:       "repair B",
+	})
+	if err != nil {
+		t.Fatalf("amend parent through service: %v", err)
+	}
+	if amended.Promotion == nil || repository.CurrentIntent().Content != amended.Amended.Version.Content {
+		t.Fatalf("accepted amendment = %#v, want B prime as current intent", amended)
+	}
+	inspection, err := repository.InspectChange(ctx, dependent.Change.ID)
+	if err != nil {
+		t.Fatalf("inspect dependent: %v", err)
+	}
+	if inspection.LatestVersion.ID != dependent.Version.ID || inspection.LatestPromotion != nil {
+		t.Fatalf("dependent after parent amendment = %#v, want unchanged held C", inspection)
+	}
+	candidates, err := repository.DependentReconciliations(ctx)
+	if err != nil {
+		t.Fatalf("read dependent reconciliations: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Dependent.Version.ID != dependent.Version.ID {
+		t.Fatalf("dependent reconciliations = %#v, want held C", candidates)
+	}
+}
+
+func TestServiceSendsReconciledDependentThroughOrdinaryJudgement(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, acceptingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	parent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-b",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose parent: %v", err)
+	}
+	dependent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-c",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
+		Dependencies:   []intent.VersionID{parent.Version.ID},
+	})
+	if err != nil {
+		t.Fatalf("propose dependent: %v", err)
+	}
+	amended, err := repository.Amend(ctx, intent.AmendRequest{
+		IdempotencyKey:  "amend-b",
+		ChangeID:        parent.Change.ID,
+		ExpectedVersion: parent.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "b2b2b2b2"},
+		Producer:        "repository-agent",
+		Rationale:       "repair B",
+	})
+	if err != nil {
+		t.Fatalf("amend parent: %v", err)
+	}
+	promoted, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      amended.Version.ID,
+		ExpectedIntent: repository.CurrentIntent().ID,
+	})
+	if err != nil {
+		t.Fatalf("promote amended parent: %v", err)
+	}
+	request := intentservice.DependentReconciliationRequest{
+		IdempotencyKey:     "reconcile-c",
+		ExpectedVersion:    dependent.Version.ID,
+		ReplacedDependency: parent.Version.ID,
+		AcceptedVersion:    amended.Version.ID,
+		ExpectedIntent:     promoted.Intent.ID,
+		Content:            intent.ContentRef{Engine: "git", Revision: "c2c2c2c2"},
+		Producer:           "git-engine",
+		Rationale:          "replay C onto accepted B prime",
+	}
+
+	heldService := intentservice.NewWithPromotionDecider(staticResolver{repository: repository}, deferPromotionDecider{})
+	held, err := heldService.ReconcileDependent(ctx, "repo_123", request)
+	if err != nil {
+		t.Fatalf("reconcile held dependent: %v", err)
+	}
+	if held.Reconciled.Version.ChangeID != dependent.Change.ID || held.Promotion != nil {
+		t.Fatalf("held reconciliation = %#v, want durable C prime awaiting judgement", held)
+	}
+	if got := repository.CurrentIntent(); got != promoted.Intent {
+		t.Fatalf("intent after deferred judgement = %#v, want %#v", got, promoted.Intent)
+	}
+
+	promoteService := intentservice.New(staticResolver{repository: repository})
+	accepted, err := promoteService.ReconcileDependent(ctx, "repo_123", request)
+	if err != nil {
+		t.Fatalf("reconsider reconciled dependent: %v", err)
+	}
+	if accepted.Reconciled.Version.ID != held.Reconciled.Version.ID {
+		t.Fatalf("retried version = %q, want durable version %q", accepted.Reconciled.Version.ID, held.Reconciled.Version.ID)
+	}
+	if accepted.Promotion == nil || accepted.Promotion.Promotion.VersionID != held.Reconciled.Version.ID {
+		t.Fatalf("accepted promotion = %#v, want reconciled dependent", accepted.Promotion)
+	}
+}
+
+func TestServiceSendsRebasedHeldVersionThroughOrdinaryJudgement(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, acceptingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	heldService := intentservice.NewWithPromotionDecider(staticResolver{repository: repository}, deferPromotionDecider{})
+	proposed, err := heldService.Propose(ctx, "repo_123", intentservice.Proposal{
+		IdempotencyKey: "proposal-held",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose held change: %v", err)
+	}
+	unrelated, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-current",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "dddddddd"},
+		Producer:       "noam",
+	})
+	if err != nil {
+		t.Fatalf("propose current change: %v", err)
+	}
+	current, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      unrelated.Version.ID,
+		ExpectedIntent: repository.CurrentIntent().ID,
+	})
+	if err != nil {
+		t.Fatalf("promote current change: %v", err)
+	}
+
+	request := intentservice.HeldVersionRebaseRequest{
+		IdempotencyKey:  "rebase-held",
+		ExpectedVersion: proposed.Proposed.Version.ID,
+		ExpectedIntent:  current.Intent.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "c2c2c2c2"},
+		Producer:        "repository-engine",
+		Rationale:       "replay held change onto current intent",
+	}
+	held, err := heldService.RebaseHeldVersion(ctx, "repo_123", request)
+	if err != nil {
+		t.Fatalf("rebase held version: %v", err)
+	}
+	if held.Rebased.Version.ChangeID != proposed.Proposed.Change.ID || held.Promotion != nil {
+		t.Fatalf("held rebased version = %#v, want same Change awaiting judgement", held)
+	}
+
+	promoteService := intentservice.New(staticResolver{repository: repository})
+	accepted, err := promoteService.RebaseHeldVersion(ctx, "repo_123", request)
+	if err != nil {
+		t.Fatalf("reconsider rebased held version: %v", err)
+	}
+	if accepted.Rebased.Version.ID != held.Rebased.Version.ID ||
+		accepted.Promotion == nil ||
+		accepted.Promotion.Promotion.VersionID != held.Rebased.Version.ID {
+		t.Fatalf("accepted held version rebase = %#v, want same version promoted after ordinary judgement", accepted)
+	}
+}
+
 func TestPromotingAHeldVersionReconsidersItsAdmittedDependent(t *testing.T) {
 	ctx := context.Background()
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}

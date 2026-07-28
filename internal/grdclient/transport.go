@@ -84,6 +84,7 @@ type reconciliationConflictResponse struct {
 	} `json:"version"`
 	FromVersion   string   `json:"fromVersion"`
 	ToVersion     string   `json:"toVersion"`
+	BaseIntent    string   `json:"baseIntent"`
 	ReportedBy    string   `json:"reportedBy"`
 	AffectedPaths []string `json:"affectedPaths"`
 	Resolution    *struct {
@@ -94,6 +95,25 @@ type reconciliationConflictResponse struct {
 		ResolvedBy  string `json:"resolvedBy"`
 		Rationale   string `json:"rationale"`
 	} `json:"resolution"`
+	EffectiveVersion *struct {
+		ID           string   `json:"id"`
+		Change       string   `json:"change"`
+		BaseIntent   string   `json:"baseIntent"`
+		Producer     string   `json:"producer"`
+		Dependencies []string `json:"dependencies"`
+		ContentRef   struct {
+			Engine   string `json:"engine"`
+			Revision string `json:"revision"`
+		} `json:"contentRef"`
+	} `json:"effectiveVersion"`
+	EffectiveTransitions []struct {
+		Kind        string `json:"kind"`
+		FromVersion string `json:"fromVersion"`
+		ToVersion   string `json:"toVersion"`
+		FromIntent  string `json:"fromIntent"`
+		ToIntent    string `json:"toIntent"`
+		Rationale   string `json:"rationale"`
+	} `json:"effectiveTransitions"`
 }
 
 func requireAncestor(ctx context.Context, workdir string, base string, head string) error {
@@ -242,12 +262,14 @@ func (client Client) recordReconciliationConflict(
 	fromVersion string,
 	toVersion string,
 	descendantVersion string,
+	expectedIntent string,
 	affectedPaths []string,
 ) (reconciliationConflictResponse, error) {
 	body := map[string]any{
 		"fromVersion":       fromVersion,
 		"toVersion":         toVersion,
 		"descendantVersion": descendantVersion,
+		"expectedIntent":    expectedIntent,
 	}
 	if len(affectedPaths) > 0 {
 		body["affectedPaths"] = affectedPaths
@@ -261,7 +283,7 @@ func (client Client) recordReconciliationConflict(
 		return reconciliationConflictResponse{}, fmt.Errorf("create reconciliation conflict request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Idempotency-Key", reconciliationConflictIdempotencyKey(remote.repoID, fromVersion, toVersion, descendantVersion))
+	request.Header.Set("Idempotency-Key", reconciliationConflictIdempotencyKey(remote.repoID, fromVersion, toVersion, descendantVersion, expectedIntent))
 	request.SetBasicAuth(remote.username, remote.password)
 	var conflict reconciliationConflictResponse
 	if err := client.doJSON(request, &conflict); err != nil {

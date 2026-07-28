@@ -48,7 +48,9 @@ func validateReconciliationResolution(state *journalState, record journalRecord)
 	}
 	targetPromotionID, promoted := state.completed[conflict.ToVersion]
 	targetPromotion, found := state.promotions[targetPromotionID]
-	if !promoted || !found || targetPromotion.ToIntent != state.current.ID || resolution.BaseIntent != state.current.ID {
+	if !promoted || !found || conflict.BaseIntent != state.current.ID ||
+		!recordedRevisionDescendsFrom(state, state.current.ID, targetPromotion.ToIntent) ||
+		resolution.BaseIntent != state.current.ID {
 		return intent.ErrIntentAdvanced
 	}
 	if resolution.ID == "" || resolution.ToVersion != version.ID || resolution.ResolvedBy == "" || resolution.Rationale == "" {
@@ -67,10 +69,10 @@ func validateReconciliationResolution(state *journalState, record journalRecord)
 	return nil
 }
 
-func reconciledDependencies(dependencies []intent.VersionID, from, to intent.VersionID) []intent.VersionID {
+func reconciledDependencies(dependencies []intent.VersionID, superseded ...intent.VersionID) []intent.VersionID {
 	filtered := make([]intent.VersionID, 0, len(dependencies))
 	for _, dependency := range dependencies {
-		if dependency == from || dependency == to {
+		if slices.Contains(superseded, dependency) {
 			continue
 		}
 		filtered = append(filtered, dependency)

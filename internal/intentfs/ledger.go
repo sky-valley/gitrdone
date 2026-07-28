@@ -381,6 +381,7 @@ func (ledger *Ledger) replay() error {
 			}
 			return fmt.Errorf("decode journal line %d: trailing data: %w", line, err)
 		}
+		record = normalizeLegacyRecord(&ledger.state, record)
 		if err := validateRecord(&ledger.state, record); err != nil {
 			return fmt.Errorf("apply journal line %d: %w", line, err)
 		}

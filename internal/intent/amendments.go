@@ -9,7 +9,6 @@ import (
 
 var ErrVersionAdvanced = errors.New("change version advanced")
 var ErrVersionPromotionStarted = errors.New("change version promotion has started")
-var ErrDependentVersionsNeedReconciliation = errors.New("dependent versions need reconciliation before amendment")
 
 type Amendment struct {
 	FromVersion VersionID
@@ -95,14 +94,6 @@ func (repository *Repository) Amend(ctx context.Context, request AmendRequest) (
 	} else if found && pending.Promotion.VersionID == previous.ID {
 		return Amended{}, ErrVersionPromotionStarted
 	}
-	dependents, err := repository.changes.Dependents(ctx, previous.ID)
-	if err != nil {
-		return Amended{}, fmt.Errorf("read dependent versions before amendment: %w", err)
-	}
-	if len(dependents) > 0 {
-		return Amended{}, ErrDependentVersionsNeedReconciliation
-	}
-
 	versionID, err := newID("version")
 	if err != nil {
 		return Amended{}, fmt.Errorf("create amended version id: %w", err)

@@ -77,6 +77,7 @@ func TestRepositoryResolvesReconciliationConflictAsNewVersionOfExistingChange(t 
 		FromVersion:       original.Version.ID,
 		ToVersion:         amended.Version.ID,
 		DescendantVersion: descendant.Version.ID,
+		ExpectedIntent:    promoted.Intent.ID,
 		ReportedBy:        "ion",
 		AffectedPaths:     []string{"model.go"},
 	})

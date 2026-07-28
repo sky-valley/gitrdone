@@ -840,7 +840,7 @@ Root-intent `PUT` is an administrative bootstrap exception. Git smart HTTP, LFS,
 
 Repository amendment remains an internal judgement operation. The executable J3 proof reaches it through an in-process test seam, not a production HTTP route. Change inspection exposes `latestAmendment` and `latestPromotion`; immutable version history remains the complete record.
 
-Recording a reconciliation conflict is different from commanding judgement. It is an authenticated adapter report that an existing immutable descendant Version C could not be replayed from original B onto the still-current accepted amendment B′. C is admitted first through the ordinary proposal boundary, so the conflict preserves rather than manufactures its Change/Version identity. The repository assigns only the durable Conflict identity and records the authenticated reporter separately from C's author; subsequent judgement remains internal.
+Recording a reconciliation conflict is different from commanding judgement. It is an authenticated adapter report that an existing immutable descendant Version C could not be replayed from original B onto accepted amendment B′ at an exact current intent. B′ may already be historical if unrelated accepted work followed it; the request must CAS the actual integration base and B′ must remain in its ancestry. C is admitted first through the ordinary proposal boundary, so the conflict preserves rather than manufactures its Change/Version identity. The repository assigns only the durable Conflict identity and records the authenticated reporter separately from C's author; subsequent judgement remains internal.
 
 The current judgement seam is deliberately narrow: a `PromotionDecider` receives a `JudgementSubject` containing one change and one immutable version, then returns `PromoteNow` or `DeferPromotion`. This does not claim to model the eventual plans, tools, tests, amendments, human reviews, or multi-step judgement process.
 
@@ -864,18 +864,18 @@ The thin Git client can detect a failed rebase, but persisting only an error str
 
 ### Resolution
 
-When local successor C cannot be replayed from submitted B onto accepted amendment B′:
+When local successor C cannot be replayed from submitted B onto accepted amendment B′ at current integration base D:
 
 - the client creates a recovery ref and restores the clean workspace at C;
 - C is published and admitted through the ordinary proposal boundary as an immutable Version of a newly identified Change;
 - the repository records one idempotent `ReconciliationConflict` linking B, B′, and C;
-- the record is accepted only while B′ still produces current Intent, serialized against promotion;
+- the record is accepted only while D is still current and B′ remains in D's accepted ancestry, serialized against promotion;
 - `reportedBy` preserves the authenticated authority that asserted the replay failure;
 - affected Git paths are optional, bounded diagnostics, not the authoritative representation of the conflict;
-- accepted Intent and canonical trunk remain at B′;
+- accepted Intent and canonical trunk remain at D;
 - `grd status` reads the durable conflict and reports that judgement is pending.
 
-The record has no mutable workflow enum and no resolution command. Its current existence means that reconciliation awaits judgement. The explicit conflict lineage records that C was derived from B; it does not misuse promotion dependencies for provenance. This avoids permanently making C depend on a superseded version that can never promote.
+The record has no mutable workflow enum and no resolution command. An unresolved attempt against the current integration base means reconciliation awaits judgement. If accepted intent advances, reads derive `superseded`; the immutable attempt remains audit evidence while the client or engine may try again against the new current intent. The explicit conflict lineage records that C was derived from B; it does not misuse promotion dependencies for provenance. This avoids permanently making C depend on a superseded version that can never promote.
 
 Conflict discovery is an oldest-first, cursor-paginated read over durable repository history. The ledger privately indexes conflict IDs in recording order and reconstructs that index from journal events after restart. This is not a second queue or lifecycle authority. When resolution events exist, the read model may derive a different state without rewriting the conflict record.
 
@@ -905,17 +905,17 @@ The resolution operation must also remain safe when accepted intent moves while 
 
 The VCS engine or judgement arm produces concrete C′ content. The repository then performs one internal, idempotent resolution operation that:
 
-- requires the exact conflict, C version, and still-current B′ intent;
+- requires the exact conflict, C version, and still-current integration base D;
 - admits C′ as a new immutable Version of C's existing Change;
 - records the attributed resolving actor separately from the content producer;
-- sets C′'s base to the accepted B′ intent;
+- sets C′'s base to D;
 - removes superseded B/B′ lineage from promotion dependencies while preserving unrelated dependencies;
 - atomically records C′ and an immutable `ReconciliationResolution` fact;
 - leaves the original conflict unchanged as audit history.
 
-The conflict read model derives `awaiting_judgement` when no resolution exists and `resolved` when the immutable resolution fact exists. Retrying the same operation-typed idempotency key returns the same C′ and resolution, including after restart. Reusing that key for different input fails.
+The conflict read model derives `awaiting_judgement` when no resolution exists and `resolved` when the immutable resolution fact exists against current intent. If that unresolved attempt or its unpromoted C′ falls behind a newer accepted intent, reads derive `superseded` without rewriting either fact. Retrying the same operation-typed idempotency key returns the same C′ and resolution, including after restart. Reusing that key for different input fails.
 
-Resolution and promotion remain separate domain outcomes. The current approve-all service may immediately run the ordinary judgement and promotion path after recording a resolution, but the resolution record does not itself move canonical intent. If accepted intent is no longer the expected B′ intent, resolution fails closed rather than rebasing onto an unexamined state.
+Resolution and promotion remain separate domain outcomes. The current approve-all service may immediately run the ordinary judgement and promotion path after recording a resolution, but the resolution record does not itself move canonical intent. If accepted intent is no longer the exact expected integration base, that attempt fails closed; Resolution 015 defines how stale held work is reconsidered without pretending the original B → B′ replacement is happening again.
 
 Repository-side resolution is currently an in-process judgement command, not a public HTTP mutation endpoint. Existing conflict GETs expose the derived state and resolution fact. Resolution 014 defines the implemented Git-client portal that brings C′ back into a workspace after ordinary judgement accepts it.
 
@@ -939,10 +939,10 @@ Once repository judgement has accepted C′, a plain Git workspace may still be 
 
 ### Resolution
 
-`grd sync` is the Git portal for an already-recorded repository resolution; it does not resolve the conflict itself. Recording C′ does not imply that judgement promoted it. While C′ remains pending, status shows “resolution awaiting judgement” and sync leaves the workspace untouched. Once C′ is accepted, the client:
+`grd sync` is the Git portal for an already-recorded repository resolution; it does not resolve the conflict itself. Recording C′ does not imply that judgement promoted it. While C′ remains pending, status shows “resolution awaiting judgement” and sync leaves the workspace untouched. If C′ is rebased through immutable held-version facts before acceptance, the conflict read model exposes that effective chain and the portal uses its latest accepted Version rather than abandoning C′. Once the effective resolution is accepted, the client:
 
-- validates the immutable conflict, its C → C′ resolution lineage, the exact accepted B′ intent → C′ promotion edge, and the matching current intent;
-- fetches accepted C′ and requires the local workspace to descend from captured C;
+- validates the immutable conflict, its C → C′ resolution, every later held-version rebase or ordinary amendment, and the effective Version's promotion edge;
+- fetches current accepted Git intent containing that effective Version and requires the local workspace to descend from captured C;
 - protects the exact pre-sync HEAD at `refs/grd/recovery/<head>`;
 - moves directly to C′ when no commits follow C, or asks Git to replay only `C..HEAD` onto C′;
 - aborts and verifies restoration of the exact clean pre-sync workspace if that newer-work replay conflicts;
@@ -958,3 +958,36 @@ gitrdone owns the durable identities, accepted outcome, explanation, and safety 
 ### Remaining edge
 
 If work created after captured C also conflicts with accepted C′, the current Git adapter restores it cleanly and leaves the durable resolution available, but does not automatically create another judgement object. If that newer work contains merge commits, the Git adapter refuses before mutation rather than flattening its topology through ordinary rebase. Those follow-on paths need a deliberate product contract or a richer engine rather than recursive conflict manufacture or hidden history changes in the client.
+
+## Resolution 015: stale reconciled work is rebased as held work, not as another dependency replacement
+
+**Status:** Agreed and implemented for J2.3
+
+### Reservation
+
+Reconciliation may produce C′ against current intent D and then correctly defer promotion for judgement. If unrelated E becomes accepted first, C′ cannot promote because it is based on D. Describing the next operation as another B → B′ dependency replacement would be false: B was already removed from C′'s promotion dependencies. Globally blocking E until every reconciled descendant finishes would also make unrelated work hostage to one judgement path.
+
+### Resolution
+
+The repository distinguishes two transitions:
+
+- `DependentReconciliation` records the causal B → B′ rewrite and produces C′ while preserving C's Change identity; and
+- `HeldVersionRebase` records the later mechanical C′@D → C″@E transition when accepted intent advances before C′ is promoted.
+
+`HeldVersionRebase` is an internal, engine-neutral operation. It requires the exact latest unpromoted version and exact current intent, requires the old base to be in current intent's ancestry, admits a new immutable Version of the same Change, preserves its dependencies, and records old/new Version and Intent identities plus rationale. Producing C″ still does not promote it; the service sends C″ through ordinary judgement.
+
+Candidates are derived from immutable reconciliation and resolution history plus each Change's latest Version. No pending flag, mutable lifecycle enum, or second queue is persisted. The filesystem ledger stores the rebase fact and operation-typed idempotency record, so exact retry after restart returns the same C″. Repeated intent advances can derive the latest held Version again without relabelling the original B → B′ provenance.
+
+An unresolved conflict or unpromoted resolution whose integration base falls behind current intent is derived as `superseded`. The old attempt remains immutable audit history. For an unresolved attempt, the Git portal clears only its local binding and retries original C against current accepted content. For an attempt that already has C′, the portal does not discard that repository-produced content or manufacture another conflict on obsolete C: it reports that repository rebasing is pending. Once an engine records C′ → C″, conflict reads expose an ordered effective chain containing both held-version rebases and ordinary same-Change amendments; after ordinary judgement accepts the latest Version, the portal applies current accepted Git intent containing it.
+
+### jj boundary
+
+This operation names the repository consequence, not a new merge engine. Today an internal engine or Git adapter supplies already-produced content. With jj-core, descendant rebasing and conflicted content production move to jj while gitrdone retains stable Change identity, immutable transition facts, judgement, and promotion authority.
+
+### Scaling note
+
+The filesystem prototype discovers work by scanning immutable reconciliation/conflict history in bounded pages. Before this becomes a polling scheduler, replace full-history scans with consumer-shaped indexes reconstructed from the same facts. That is a query optimization, not a new lifecycle authority.
+
+### Agreed ownership rule
+
+> Dependency replacement explains why C first changed; later intent movement rebases held C as held work, and every resulting Version still faces ordinary judgement.

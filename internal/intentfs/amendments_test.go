@@ -89,6 +89,116 @@ func TestLedgerRestoresAmendmentIdentityRationaleAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestLedgerRestoresDependentReconciliationDerivedFromAcceptedAmendment(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	journalPath := filepath.Join(t.TempDir(), "intent.journal")
+	ledger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("open ledger: %v", err)
+	}
+	repository, err := intent.OpenRepository(ctx, initialContent, ledger, &recordingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	original, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-b",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose parent: %v", err)
+	}
+	dependent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-c",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
+		Dependencies:   []intent.VersionID{original.Version.ID},
+	})
+	if err != nil {
+		t.Fatalf("propose dependent: %v", err)
+	}
+	firstAmendment, err := repository.Amend(ctx, intent.AmendRequest{
+		IdempotencyKey:  "amend-b-once",
+		ChangeID:        original.Change.ID,
+		ExpectedVersion: original.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "b1b1b1b1"},
+		Producer:        "repository",
+		Rationale:       "first repair to B",
+	})
+	if err != nil {
+		t.Fatalf("amend parent once: %v", err)
+	}
+	secondDependent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-d",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "dddddddd"},
+		Producer:       "ion",
+		Dependencies:   []intent.VersionID{firstAmendment.Version.ID},
+	})
+	if err != nil {
+		t.Fatalf("propose dependent on first amendment: %v", err)
+	}
+	finalAmendment, err := repository.Amend(ctx, intent.AmendRequest{
+		IdempotencyKey:  "amend-b-twice",
+		ChangeID:        original.Change.ID,
+		ExpectedVersion: firstAmendment.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "b2b2b2b2"},
+		Producer:        "repository",
+		Rationale:       "second repair to B",
+	})
+	if err != nil {
+		t.Fatalf("amend parent twice: %v", err)
+	}
+	promoted, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      finalAmendment.Version.ID,
+		ExpectedIntent: repository.CurrentIntent().ID,
+	})
+	if err != nil {
+		t.Fatalf("promote amended parent: %v", err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatalf("close ledger: %v", err)
+	}
+
+	reopened, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("reopen ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	restarted, err := intent.OpenRepository(ctx, initialContent, reopened, &recordingAdmission{}, &recordingProjection{current: promoted.Intent.Content})
+	if err != nil {
+		t.Fatalf("reopen repository: %v", err)
+	}
+	candidates, err := restarted.DependentReconciliations(ctx)
+	if err != nil {
+		t.Fatalf("read restored dependent reconciliations: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("restored dependent reconciliations = %#v, want two amendment-chain candidates", candidates)
+	}
+	byDependent := make(map[intent.ChangeID]intent.DependentReconciliationCandidate, len(candidates))
+	for _, candidate := range candidates {
+		byDependent[candidate.Dependent.Change.ID] = candidate
+	}
+	firstCandidate := byDependent[dependent.Change.ID]
+	if firstCandidate.ReplacedDependency != original.Version.ID ||
+		firstCandidate.AcceptedVersion != finalAmendment.Version.ID ||
+		firstCandidate.AcceptedAtIntent != promoted.Intent.ID ||
+		firstCandidate.Dependent.Version.ID != dependent.Version.ID {
+		t.Fatalf("restored original-dependent reconciliation = %#v, want B -> B2 with C", firstCandidate)
+	}
+	secondCandidate := byDependent[secondDependent.Change.ID]
+	if secondCandidate.ReplacedDependency != firstAmendment.Version.ID ||
+		secondCandidate.AcceptedVersion != finalAmendment.Version.ID ||
+		secondCandidate.AcceptedAtIntent != promoted.Intent.ID ||
+		secondCandidate.Dependent.Version.ID != secondDependent.Version.ID {
+		t.Fatalf("restored intermediate-dependent reconciliation = %#v, want B1 -> B2 with D", secondCandidate)
+	}
+}
+
 func TestLedgerRestoresOperationTypedIdempotency(t *testing.T) {
 	ctx := context.Background()
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}

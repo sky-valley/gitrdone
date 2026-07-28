@@ -74,15 +74,7 @@ func (ledger *transientLedger) RecordReconciliationConflict(_ context.Context, k
 		}
 		return ErrIdempotencyConflict
 	}
-	if err := validateReconciliationConflictRecord(
-		ledger.changes,
-		ledger.versions,
-		ledger.amendments,
-		ledger.current,
-		ledger.promotions,
-		ledger.completed,
-		conflict,
-	); err != nil {
+	if err := validateReconciliationConflictRecord(ledger, conflict); err != nil {
 		return err
 	}
 	ledger.conflicts[conflict.ID] = cloneReconciliationConflict(conflict)
@@ -95,38 +87,32 @@ func (ledger *transientLedger) RecordReconciliationConflict(_ context.Context, k
 	return nil
 }
 
-func validateReconciliationConflictRecord(
-	changes map[ChangeID]Change,
-	versions map[VersionID]Version,
-	amendments map[VersionID]Amendment,
-	current Revision,
-	promotions map[PromotionID]Promotion,
-	completed map[VersionID]PromotionID,
-	conflict ReconciliationConflict,
-) error {
+func validateReconciliationConflictRecord(ledger *transientLedger, conflict ReconciliationConflict) error {
 	if conflict.ID == "" || conflict.Change.ID == "" || conflict.Version.ID == "" ||
 		conflict.Version.ChangeID != conflict.Change.ID ||
-		conflict.FromVersion == "" || conflict.ToVersion == "" || conflict.ReportedBy == "" {
+		conflict.FromVersion == "" || conflict.ToVersion == "" || conflict.BaseIntent == "" || conflict.ReportedBy == "" {
 		return errors.New("invalid reconciliation conflict identity")
 	}
-	from, fromFound := versions[conflict.FromVersion]
-	to, toFound := versions[conflict.ToVersion]
-	amendment, amendmentFound := amendments[conflict.ToVersion]
+	from, fromFound := ledger.versions[conflict.FromVersion]
+	to, toFound := ledger.versions[conflict.ToVersion]
 	if !fromFound || !toFound || from.ChangeID != to.ChangeID ||
-		!amendmentFound || amendment.FromVersion != from.ID || amendment.ToVersion != to.ID {
+		!transientAmendmentDescendant(ledger, from.ID, to.ID) {
 		return errors.New("invalid reconciliation conflict lineage")
 	}
-	promotionID, promoted := completed[to.ID]
+	promotionID, promoted := ledger.completed[to.ID]
 	if !promoted {
 		return ErrVersionNotPromoted
 	}
-	promotion, found := promotions[promotionID]
-	if !found || promotion.ToIntent != current.ID {
+	promotion, found := ledger.promotions[promotionID]
+	if !found || conflict.BaseIntent != ledger.current.ID ||
+		!transientRevisionDescendsFrom(ledger, ledger.current.ID, promotion.ToIntent) {
 		return ErrIntentAdvanced
 	}
-	descendant, descendantFound := versions[conflict.Version.ID]
-	descendantChange, changeFound := changes[conflict.Change.ID]
+	descendant, descendantFound := ledger.versions[conflict.Version.ID]
+	descendantChange, changeFound := ledger.changes[conflict.Change.ID]
+	descendantIDs := ledger.versionIDs[conflict.Change.ID]
 	if !descendantFound || !changeFound ||
+		len(descendantIDs) == 0 || descendantIDs[len(descendantIDs)-1] != descendant.ID ||
 		descendant.ChangeID == from.ChangeID ||
 		descendant.BaseIntent != from.BaseIntent ||
 		descendant.ChangeID != descendantChange.ID ||
@@ -146,6 +132,7 @@ func reconciliationConflictsEqual(left, right ReconciliationConflict) bool {
 		left.Change == right.Change &&
 		left.FromVersion == right.FromVersion &&
 		left.ToVersion == right.ToVersion &&
+		left.BaseIntent == right.BaseIntent &&
 		left.ReportedBy == right.ReportedBy &&
 		versionsEqual(left.Version, right.Version) &&
 		slices.Equal(left.AffectedPaths, right.AffectedPaths)

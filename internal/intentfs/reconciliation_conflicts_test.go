@@ -69,6 +69,7 @@ func TestLedgerRestoresReconciliationConflictIdentityAndIdempotency(t *testing.T
 		FromVersion:       original.Version.ID,
 		ToVersion:         amended.Version.ID,
 		DescendantVersion: descendant.Version.ID,
+		ExpectedIntent:    repository.CurrentIntent().ID,
 		ReportedBy:        "ion",
 	}
 	recorded, err := repository.RecordReconciliationConflict(ctx, request)
@@ -89,6 +90,7 @@ func TestLedgerRestoresReconciliationConflictIdentityAndIdempotency(t *testing.T
 		FromVersion:       original.Version.ID,
 		ToVersion:         amended.Version.ID,
 		DescendantVersion: secondDescendant.Version.ID,
+		ExpectedIntent:    repository.CurrentIntent().ID,
 		ReportedBy:        "ion",
 	})
 	if err != nil {
@@ -101,6 +103,40 @@ func TestLedgerRestoresReconciliationConflictIdentityAndIdempotency(t *testing.T
 	if err != nil {
 		t.Fatalf("read valid conflict journal: %v", err)
 	}
+	t.Run("restore pre-base-intent conflict record", func(t *testing.T) {
+		lines := bytes.Split(bytes.TrimSuffix(journal, []byte("\n")), []byte("\n"))
+		for index, line := range lines {
+			var record map[string]any
+			if err := json.Unmarshal(line, &record); err != nil {
+				t.Fatalf("decode journal line: %v", err)
+			}
+			if record["kind"] != "reconciliation_conflict_recorded" {
+				continue
+			}
+			delete(record["reconciliation_conflict"].(map[string]any), "BaseIntent")
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				t.Fatalf("encode legacy conflict record: %v", err)
+			}
+			lines[index] = encoded
+		}
+		legacyPath := filepath.Join(t.TempDir(), "intent.journal")
+		if err := os.WriteFile(legacyPath, append(bytes.Join(lines, []byte("\n")), '\n'), 0o600); err != nil {
+			t.Fatalf("write legacy conflict journal: %v", err)
+		}
+		legacy, err := intentfs.Open(legacyPath)
+		if err != nil {
+			t.Fatalf("open legacy conflict journal: %v", err)
+		}
+		defer legacy.Close()
+		restored, found, err := legacy.ReconciliationConflict(ctx, recorded.ID)
+		if err != nil {
+			t.Fatalf("read restored legacy conflict: %v", err)
+		}
+		if !found || restored.BaseIntent != promoted.Intent.ID {
+			t.Fatalf("restored legacy conflict = %#v, %t; want inferred base %q", restored, found, promoted.Intent.ID)
+		}
+	})
 	for name, paths := range map[string][]string{
 		"empty":     {""},
 		"duplicate": {"same", "same"},

@@ -54,9 +54,34 @@ func TestValidateResolvedConflictChangeAllowsJudgementPendingResolution(t *testi
 	}
 }
 
+func TestValidateReconciliationConflictAllowsSupersededResolvedAttempt(t *testing.T) {
+	conflict, _, _ := validResolvedConflictChange()
+	conflict.ID = "conflict_c"
+	conflict.State = "superseded"
+	conflict.Change.ID = "change_c"
+	conflict.Version.ID = "version_c"
+	conflict.Version.Change = "change_c"
+	conflict.Version.BaseIntent = "intent_a"
+	conflict.Version.Producer = "ion"
+	conflict.Version.ContentRef.Engine = "git"
+	conflict.Version.ContentRef.Revision = "cccccccccccccccccccccccccccccccccccccccc"
+	conflict.FromVersion = "version_b"
+	conflict.ToVersion = "version_b_prime"
+	conflict.ReportedBy = "repository-engine"
+	state := continuationState{
+		ConflictID:    conflict.ID,
+		ParentVersion: conflict.FromVersion,
+	}
+
+	if err := validateReconciliationConflict(conflict, state, conflict.ToVersion, "", ""); err != nil {
+		t.Fatalf("validate superseded resolved attempt: %v", err)
+	}
+}
+
 func validResolvedConflictChange() (reconciliationConflictResponse, changeResponse, changeResponse) {
 	var conflict reconciliationConflictResponse
 	conflict.Change.ID = "change_c"
+	conflict.BaseIntent = "intent_b_prime"
 	conflict.Resolution = &struct {
 		ID          string `json:"id"`
 		FromVersion string `json:"fromVersion"`

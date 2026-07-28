@@ -23,6 +23,16 @@ func (client Client) reconcileConflictResolution(
 	if err := validateReconciliationConflict(conflict, state, parent.LatestVersion.ID, "", ""); err != nil {
 		return err
 	}
+	if conflict.State == "superseded" {
+		if conflict.Resolution != nil {
+			return errors.New("reconciliation resolution requires repository rebase")
+		}
+		state.ConflictID = ""
+		if err := rememberContinuationState(ctx, workdir, origin.repoID, state); err != nil {
+			return fmt.Errorf("forget superseded reconciliation attempt: %w", err)
+		}
+		return client.reconcileAmendedParent(ctx, workdir, origin, state)
+	}
 	if conflict.State == "awaiting_judgement" {
 		if err := requireCapturedConflictAncestor(ctx, workdir, conflict, head); err != nil {
 			return err
@@ -40,14 +50,16 @@ func (client Client) reconcileConflictResolution(
 	if resolvedChange.LatestPromotion == nil {
 		return errors.New("reconciliation resolution is awaiting judgement")
 	}
-	targetRevision := resolvedChange.LatestVersion.ContentRef.Revision
 	current, err := client.currentIntent(ctx, origin)
 	if err != nil {
 		return err
 	}
-	if current.ID != resolvedChange.LatestPromotion.ToIntent ||
-		current.ContentRef.Engine != "git" ||
-		current.ContentRef.Revision != targetRevision {
+	if current.ContentRef.Engine != "git" || current.ContentRef.Revision == "" {
+		return errors.New("accepted intent does not match the reconciliation resolution")
+	}
+	targetRevision := current.ContentRef.Revision
+	effectiveRevision := resolvedChange.LatestVersion.ContentRef.Revision
+	if current.ID == resolvedChange.LatestPromotion.ToIntent && targetRevision != effectiveRevision {
 		return errors.New("accepted intent does not match the reconciliation resolution")
 	}
 	if err := gitRun(ctx, workdir, "fetch", "--quiet", "origin"); err != nil {
@@ -55,6 +67,15 @@ func (client Client) reconcileConflictResolution(
 	}
 	if err := gitRun(ctx, workdir, "cat-file", "-e", targetRevision+"^{commit}"); err != nil {
 		return errors.New("accepted reconciliation resolution is not available from origin")
+	}
+	if current.ID != resolvedChange.LatestPromotion.ToIntent {
+		containsResolution, err := isAncestor(ctx, workdir, effectiveRevision, targetRevision)
+		if err != nil {
+			return fmt.Errorf("check accepted resolution ancestry: %w", err)
+		}
+		if !containsResolution {
+			return errors.New("current accepted intent does not contain the reconciliation resolution")
+		}
 	}
 
 	alreadyApplied, err := isAncestor(ctx, workdir, targetRevision, head)
@@ -164,18 +185,20 @@ func requireLinearPortalReplay(ctx context.Context, workdir, base, head string) 
 }
 
 func validateResolvedConflictChange(conflict reconciliationConflictResponse, parent changeResponse, change changeResponse) error {
+	effectiveVersion, effectiveIntent, valid := effectiveReconciliationTarget(conflict)
 	if conflict.Resolution == nil ||
+		!valid ||
 		parent.LatestPromotion == nil ||
-		conflict.Resolution.BaseIntent != parent.LatestPromotion.ToIntent ||
+		conflict.Resolution.BaseIntent != conflict.BaseIntent ||
 		change.ID != conflict.Change.ID ||
-		change.LatestVersion.ID != conflict.Resolution.ToVersion ||
-		change.LatestVersion.BaseIntent != conflict.Resolution.BaseIntent ||
+		change.LatestVersion.ID != effectiveVersion ||
+		change.LatestVersion.BaseIntent != effectiveIntent ||
 		change.LatestVersion.ContentRef.Engine != "git" ||
 		change.LatestVersion.ContentRef.Revision == "" {
 		return errors.New("server returned an invalid reconciliation resolution")
 	}
 	if change.LatestPromotion != nil &&
-		(change.LatestPromotion.FromIntent != conflict.Resolution.BaseIntent ||
+		(change.LatestPromotion.FromIntent != effectiveIntent ||
 			change.LatestPromotion.Version != change.LatestVersion.ID) {
 		return errors.New("server returned an invalid reconciliation resolution")
 	}
@@ -189,6 +212,7 @@ func validateReconciliationConflict(conflict reconciliationConflictResponse, sta
 		conflict.Version.Change != conflict.Change.ID ||
 		conflict.FromVersion != state.ParentVersion ||
 		conflict.ToVersion != toVersion ||
+		conflict.BaseIntent == "" ||
 		conflict.ReportedBy == "" ||
 		conflict.Version.ContentRef.Engine != "git" ||
 		conflict.Version.ContentRef.Revision == "" ||
@@ -197,18 +221,24 @@ func validateReconciliationConflict(conflict reconciliationConflictResponse, sta
 	}
 	switch conflict.State {
 	case "awaiting_judgement":
-		if conflict.Resolution != nil {
+		if conflict.Resolution != nil || conflict.EffectiveVersion != nil || len(conflict.EffectiveTransitions) > 0 {
+			return errors.New("server returned an invalid reconciliation conflict")
+		}
+	case "superseded":
+		if conflict.Resolution == nil {
+			if conflict.EffectiveVersion != nil || len(conflict.EffectiveTransitions) > 0 {
+				return errors.New("server returned an invalid reconciliation conflict")
+			}
+		} else if !validReconciliationResolution(conflict) {
+			return errors.New("server returned an invalid reconciliation conflict")
+		} else if _, _, valid := effectiveReconciliationTarget(conflict); !valid {
 			return errors.New("server returned an invalid reconciliation conflict")
 		}
 	case "resolved":
-		if conflict.Resolution == nil ||
-			conflict.Resolution.ID == "" ||
-			conflict.Resolution.FromVersion != conflict.Version.ID ||
-			conflict.Resolution.ToVersion == "" ||
-			conflict.Resolution.ToVersion == conflict.Version.ID ||
-			conflict.Resolution.BaseIntent == "" ||
-			strings.TrimSpace(conflict.Resolution.ResolvedBy) == "" ||
-			strings.TrimSpace(conflict.Resolution.Rationale) == "" {
+		if !validReconciliationResolution(conflict) {
+			return errors.New("server returned an invalid reconciliation conflict")
+		}
+		if _, _, valid := effectiveReconciliationTarget(conflict); !valid {
 			return errors.New("server returned an invalid reconciliation conflict")
 		}
 	default:
@@ -221,4 +251,59 @@ func validateReconciliationConflict(conflict reconciliationConflictResponse, sta
 		return errors.New("server recorded different reconciliation descendant content")
 	}
 	return nil
+}
+
+func validReconciliationResolution(conflict reconciliationConflictResponse) bool {
+	return conflict.Resolution != nil &&
+		conflict.Resolution.ID != "" &&
+		conflict.Resolution.FromVersion == conflict.Version.ID &&
+		conflict.Resolution.ToVersion != "" &&
+		conflict.Resolution.ToVersion != conflict.Version.ID &&
+		conflict.Resolution.BaseIntent != "" &&
+		conflict.Resolution.BaseIntent == conflict.BaseIntent &&
+		strings.TrimSpace(conflict.Resolution.ResolvedBy) != "" &&
+		strings.TrimSpace(conflict.Resolution.Rationale) != ""
+}
+
+func effectiveReconciliationTarget(conflict reconciliationConflictResponse) (string, string, bool) {
+	if conflict.Resolution == nil {
+		return "", "", false
+	}
+	version := conflict.Resolution.ToVersion
+	intentID := conflict.Resolution.BaseIntent
+	for _, transition := range conflict.EffectiveTransitions {
+		if transition.FromVersion != version ||
+			transition.FromIntent != intentID ||
+			transition.ToVersion == "" ||
+			transition.ToVersion == transition.FromVersion ||
+			transition.ToIntent == "" ||
+			strings.TrimSpace(transition.Rationale) == "" {
+			return "", "", false
+		}
+		switch transition.Kind {
+		case "amendment":
+			if transition.ToIntent != transition.FromIntent {
+				return "", "", false
+			}
+		case "held_version_rebase":
+			if transition.ToIntent == transition.FromIntent {
+				return "", "", false
+			}
+		default:
+			return "", "", false
+		}
+		version = transition.ToVersion
+		intentID = transition.ToIntent
+	}
+	if conflict.EffectiveVersion == nil {
+		return version, intentID, len(conflict.EffectiveTransitions) == 0
+	}
+	if conflict.EffectiveVersion.ID != version ||
+		conflict.EffectiveVersion.Change != conflict.Change.ID ||
+		conflict.EffectiveVersion.BaseIntent != intentID ||
+		conflict.EffectiveVersion.ContentRef.Engine != "git" ||
+		conflict.EffectiveVersion.ContentRef.Revision == "" {
+		return "", "", false
+	}
+	return version, intentID, true
 }

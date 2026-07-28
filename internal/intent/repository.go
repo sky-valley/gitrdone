@@ -114,18 +114,20 @@ type TrunkProjection interface {
 }
 
 type Repository struct {
-	changeMu    sync.Mutex
-	promotionMu sync.Mutex
-	stateMu     sync.RWMutex
-	current     Revision
-	admission   ContentAdmission
-	projection  TrunkProjection
-	intents     IntentStore
-	changes     ChangeStore
-	amendments  AmendmentStore
-	promotions  PromotionJournal
-	conflicts   ReconciliationConflictStore
-	conflict    *ProjectionConflict
+	changeMu        sync.Mutex
+	promotionMu     sync.Mutex
+	stateMu         sync.RWMutex
+	current         Revision
+	admission       ContentAdmission
+	projection      TrunkProjection
+	intents         IntentStore
+	changes         ChangeStore
+	amendments      AmendmentStore
+	reconciliations DependentReconciliationStore
+	rebases         HeldVersionRebaseStore
+	promotions      PromotionJournal
+	conflicts       ReconciliationConflictStore
+	conflict        *ProjectionConflict
 }
 
 func NewRepository(initial ContentRef, admission ContentAdmission, projection TrunkProjection) (*Repository, error) {
@@ -165,14 +167,16 @@ func OpenRepository(ctx context.Context, initial ContentRef, ledger Ledger, admi
 	}
 
 	repository := &Repository{
-		current:    current,
-		admission:  admission,
-		projection: projection,
-		intents:    ledger,
-		changes:    ledger,
-		amendments: ledger,
-		promotions: ledger,
-		conflicts:  ledger,
+		current:         current,
+		admission:       admission,
+		projection:      projection,
+		intents:         ledger,
+		changes:         ledger,
+		amendments:      ledger,
+		reconciliations: ledger,
+		rebases:         ledger,
+		promotions:      ledger,
+		conflicts:       ledger,
 	}
 	if err := repository.Reconcile(ctx); err != nil {
 		var conflict *ProjectionConflict

@@ -62,6 +62,7 @@ func TestRepositoryRecordsReconciliationConflictAsDurableWork(t *testing.T) {
 		FromVersion:       original.Version.ID,
 		ToVersion:         amended.Version.ID,
 		DescendantVersion: descendant.Version.ID,
+		ExpectedIntent:    repository.CurrentIntent().ID,
 		ReportedBy:        "ion",
 		AffectedPaths:     []string{"feature.txt", "feature.txt", " config.yaml "},
 	}
@@ -205,10 +206,127 @@ func TestRepositoryReconciliationConflictRequiresAcceptedAmendmentLineage(t *tes
 		FromVersion:       original.Version.ID,
 		ToVersion:         amended.Version.ID,
 		DescendantVersion: descendant.Version.ID,
+		ExpectedIntent:    repository.CurrentIntent().ID,
 		ReportedBy:        "ion",
 	})
 	if !errors.Is(err, intent.ErrVersionNotPromoted) {
 		t.Fatalf("unaccepted amendment conflict error = %v, want ErrVersionNotPromoted", err)
+	}
+}
+
+func TestRepositoryRecordsHistoricalDependentReconciliationConflictAgainstCurrentIntent(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, statelessAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	parent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-b",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose B: %v", err)
+	}
+	dependent, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-c",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "cccccccc"},
+		Producer:       "ion",
+		Dependencies:   []intent.VersionID{parent.Version.ID},
+	})
+	if err != nil {
+		t.Fatalf("propose C: %v", err)
+	}
+	firstAmendment, err := repository.Amend(ctx, intent.AmendRequest{
+		IdempotencyKey:  "amend-b-1",
+		ChangeID:        parent.Change.ID,
+		ExpectedVersion: parent.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "b1b1b1b1"},
+		Producer:        "repository-agent",
+		Rationale:       "first repair",
+	})
+	if err != nil {
+		t.Fatalf("first amendment: %v", err)
+	}
+	finalAmendment, err := repository.Amend(ctx, intent.AmendRequest{
+		IdempotencyKey:  "amend-b-2",
+		ChangeID:        parent.Change.ID,
+		ExpectedVersion: firstAmendment.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "b2b2b2b2"},
+		Producer:        "repository-agent",
+		Rationale:       "final repair",
+	})
+	if err != nil {
+		t.Fatalf("final amendment: %v", err)
+	}
+	acceptedParent, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      finalAmendment.Version.ID,
+		ExpectedIntent: repository.CurrentIntent().ID,
+	})
+	if err != nil {
+		t.Fatalf("promote final amendment: %v", err)
+	}
+	unrelated, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-d",
+		BaseIntent:     acceptedParent.Intent.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "dddddddd"},
+		Producer:       "noam",
+	})
+	if err != nil {
+		t.Fatalf("propose D: %v", err)
+	}
+	current, err := repository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      unrelated.Version.ID,
+		ExpectedIntent: acceptedParent.Intent.ID,
+	})
+	if err != nil {
+		t.Fatalf("promote D: %v", err)
+	}
+
+	conflict, err := repository.RecordReconciliationConflict(ctx, intent.ReconciliationConflictRequest{
+		IdempotencyKey:    "conflict-c-after-d",
+		FromVersion:       parent.Version.ID,
+		ToVersion:         finalAmendment.Version.ID,
+		DescendantVersion: dependent.Version.ID,
+		ExpectedIntent:    current.Intent.ID,
+		ReportedBy:        "git-engine",
+		AffectedPaths:     []string{"schema.sql"},
+	})
+	if err != nil {
+		t.Fatalf("record historical dependent conflict: %v", err)
+	}
+	if conflict.FromVersion != parent.Version.ID ||
+		conflict.ToVersion != finalAmendment.Version.ID ||
+		conflict.BaseIntent != current.Intent.ID ||
+		conflict.Version.ID != dependent.Version.ID {
+		t.Fatalf("historical conflict = %#v, want B to B2 and C against current D", conflict)
+	}
+	candidates, err := repository.DependentReconciliations(ctx)
+	if err != nil {
+		t.Fatalf("read candidates after conflict: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("candidates after durable conflict = %#v, want conflict to own judgement work at current D", candidates)
+	}
+	resolved, err := repository.ResolveReconciliationConflict(ctx, intent.ResolveReconciliationConflictRequest{
+		IdempotencyKey:  "resolve-c-after-d",
+		ConflictID:      conflict.ID,
+		ExpectedVersion: dependent.Version.ID,
+		ExpectedIntent:  current.Intent.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "c2c2c2c2"},
+		Producer:        "git-engine",
+		ResolvedBy:      "judgement-agent",
+		Rationale:       "resolved against current D",
+	})
+	if err != nil {
+		t.Fatalf("resolve historical dependent conflict: %v", err)
+	}
+	if resolved.Version.BaseIntent != current.Intent.ID ||
+		resolved.Resolution.BaseIntent != current.Intent.ID {
+		t.Fatalf("historical resolution = %#v, want C prime based on current D", resolved)
 	}
 }
 
@@ -273,6 +391,7 @@ func TestRepositoryListsReconciliationConflictsInDurableRecordingOrder(t *testin
 			FromVersion:       original.Version.ID,
 			ToVersion:         amended.Version.ID,
 			DescendantVersion: descendant.Version.ID,
+			ExpectedIntent:    repository.CurrentIntent().ID,
 			ReportedBy:        "ion",
 			AffectedPaths:     []string{revision + ".txt"},
 		})
@@ -286,6 +405,7 @@ func TestRepositoryListsReconciliationConflictsInDurableRecordingOrder(t *testin
 		FromVersion:       original.Version.ID,
 		ToVersion:         amended.Version.ID,
 		DescendantVersion: recorded[0].Version.ID,
+		ExpectedIntent:    repository.CurrentIntent().ID,
 		ReportedBy:        "ion",
 	}); err != nil {
 		t.Fatalf("retry first conflict: %v", err)
