@@ -68,6 +68,36 @@ func TestRepositoryRefusesToPromoteASupersededVersion(t *testing.T) {
 	}
 }
 
+func TestRepositoryMovesPendingJudgementToAnAmendedVersion(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, statelessAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	proposed, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "proposal-b",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	})
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	amended, err := repository.Amend(ctx, amendmentRequest(proposed))
+	if err != nil {
+		t.Fatalf("amend: %v", err)
+	}
+
+	pending, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list pending judgements: %v", err)
+	}
+	if len(pending.Versions) != 1 || pending.Versions[0].ID != amended.Version.ID {
+		t.Fatalf("pending judgements = %#v, want amended version %q only", pending.Versions, amended.Version.ID)
+	}
+}
+
 func TestRepositorySerializesAmendmentAgainstPromotion(t *testing.T) {
 	ctx := context.Background()
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}

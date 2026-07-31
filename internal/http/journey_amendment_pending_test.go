@@ -3,8 +3,7 @@ package httpapi_test
 import "testing"
 
 func TestJourneyRepositoryAmendmentRemainsPendingJudgement(t *testing.T) {
-	decider := &recordingDeferDecider{}
-	world := newJourneyWorldWithDecider(t, decider)
+	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	grd := world.buildGRD()
 	acceptedRevision := world.currentIntent().ContentRef.Revision
@@ -13,21 +12,14 @@ func TestJourneyRepositoryAmendmentRemainsPendingJudgement(t *testing.T) {
 	if result := ion.run(grd, "submit"); result.err != nil {
 		t.Fatalf("submit original change: %v\nstdout:\n%sstderr:\n%s", result.err, result.stdout, result.stderr)
 	}
-	observed := decider.observed()
-	if len(observed) == 0 {
-		t.Fatal("decider did not observe Ion's original change")
-	}
-	original := observed[0]
+	original := world.pendingProposal("ion")
 	continuedRevision := ion.commitFile("local.txt", "Ion kept working\n", "continue locally")
 
 	repositoryAgent := world.cloneWorkspace("repository-agent")
 	amendedRevision := repositoryAgent.commitFile("feature.txt", "safe\n", "repair authorization boundary")
 	requireGitSuccess(t, "publish pending amendment", "-C", repositoryAgent.path, "push", "origin", "HEAD:refs/candidates/pending-amendment")
-	amended := amendJourneyChange(t, world, original, amendedRevision, "fixed the authorization boundary before integration", "journey-pending-amendment")
-	if amended.Promotion != nil {
-		t.Fatalf("pending amendment promotion = %#v, want none", amended.Promotion)
-	}
-	if amended.Amended.Version.ID == original.Version.ID {
+	amended := amendJourneyChangePending(t, world, original, amendedRevision, "fixed the authorization boundary before integration", "journey-pending-amendment")
+	if amended.Version.ID == original.Version.ID {
 		t.Fatal("repository amendment did not create a new version")
 	}
 

@@ -4,17 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"slices"
-	"sync"
 	"testing"
 
 	"github.com/sky-valley/gitrdone/internal/intent"
-	"github.com/sky-valley/gitrdone/internal/intentservice"
 )
 
 func TestStatusKeepsPendingChangeWhenDifferentChangePromotesTheSameContent(t *testing.T) {
-	world := newJourneyWorldWithDecider(t, &deferThenPromoteDecider{})
+	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	base := world.currentIntent()
 	grd := world.buildGRD()
@@ -30,9 +27,6 @@ func TestStatusKeepsPendingChangeWhenDifferentChangePromotesTheSameContent(t *te
 		"Idempotency-Key": "different-change-same-content",
 	}, body)
 	requireStatus(t, res, responseBody, http.StatusOK)
-	if got := world.currentIntent().ContentRef.Revision; got != revision {
-		t.Fatalf("accepted revision = %q, want duplicate content %q", got, revision)
-	}
 
 	status := ion.run(grd, "status")
 	if status.err != nil {
@@ -45,8 +39,7 @@ func TestStatusKeepsPendingChangeWhenDifferentChangePromotesTheSameContent(t *te
 }
 
 func TestJourneyJ20HoldContinueAndSubmitDependentChange(t *testing.T) {
-	decider := &recordingDeferDecider{}
-	world := newJourneyWorldWithDecider(t, decider)
+	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	accepted := world.currentIntent()
 	grd := world.buildGRD()
@@ -102,26 +95,26 @@ func TestJourneyJ20HoldContinueAndSubmitDependentChange(t *testing.T) {
 		t.Fatalf("second submit stdout = %q, want %q", second.stdout, wantSecond)
 	}
 
-	observed := decider.observed()
-	if len(observed) != 3 {
-		t.Fatalf("observed proposals = %d, want 3 including pending retry", len(observed))
+	pending, err := world.server.judgement.PendingJudgements(context.Background(), world.server.repo.ID, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list pending judgements: %v", err)
 	}
-	if len(observed[0].Version.Dependencies) != 0 {
-		t.Fatalf("parent dependencies = %q, want none", observed[0].Version.Dependencies)
+	if len(pending.Versions) != 2 {
+		t.Fatalf("pending judgements = %#v, want parent and dependent once each", pending.Versions)
 	}
-	if observed[1].Version.ID != observed[0].Version.ID || observed[1].Change.ID != observed[0].Change.ID {
-		t.Fatalf("held retry created a different proposal: first %#v, retry %#v", observed[0], observed[1])
+	if len(pending.Versions[0].Dependencies) != 0 {
+		t.Fatalf("parent dependencies = %q, want none", pending.Versions[0].Dependencies)
 	}
-	if !slices.Equal(observed[2].Version.Dependencies, []intent.VersionID{observed[0].Version.ID}) {
-		t.Fatalf("dependent dependencies = %q, want parent version %q", observed[2].Version.Dependencies, observed[0].Version.ID)
+	if !slices.Equal(pending.Versions[1].Dependencies, []intent.VersionID{pending.Versions[0].ID}) {
+		t.Fatalf("dependent dependencies = %q, want parent version %q", pending.Versions[1].Dependencies, pending.Versions[0].ID)
 	}
 	if got := world.currentIntent(); got.ID != accepted.ID || got.ContentRef.Revision != accepted.ContentRef.Revision {
 		t.Fatalf("accepted intent changed after dependent admission: %#v, want %#v", got, accepted)
 	}
 }
 
-func TestHeldSubmissionCanPromoteWithoutLeavingAStaleWorkspaceDependency(t *testing.T) {
-	world := newJourneyWorldWithDecider(t, &deferThenPromoteDecider{})
+func TestRepeatedPendingSubmissionDoesNotLeaveAStaleWorkspaceDependency(t *testing.T) {
+	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	grd := world.buildGRD()
 	ion.commitFile("auth.txt", "shared authentication base\n", "refactor authentication")
@@ -134,29 +127,27 @@ func TestHeldSubmissionCanPromoteWithoutLeavingAStaleWorkspaceDependency(t *test
 	if second.err != nil {
 		t.Fatalf("retry promoted change: %v\nstderr:\n%s", second.err, second.stderr)
 	}
-	const wantPromotion = "Submitted: refactor authentication\nPromoted\nYou can keep working.\n"
-	if second.stdout != wantPromotion {
-		t.Fatalf("promoted retry stdout = %q, want %q", second.stdout, wantPromotion)
+	const wantPending = "Submitted: refactor authentication\nAdmitted; judgement pending\nContinue working on top of it.\n"
+	if second.stdout != wantPending {
+		t.Fatalf("pending retry stdout = %q, want %q", second.stdout, wantPending)
 	}
 
 	status := ion.run(grd, "status")
 	if status.err != nil {
 		t.Fatalf("status after promotion: %v\nstderr:\n%s", status.err, status.stderr)
 	}
-	const wantStatus = "Working: new change\nBased on: accepted intent\n"
+	const wantStatus = "Working: new change\nBased on:\n  refactor authentication — judgement pending\n"
 	if status.stdout != wantStatus {
 		t.Fatalf("status after promotion = %q, want %q", status.stdout, wantStatus)
 	}
 }
 
-func TestJourneyJ22PromotingParentReconsidersSubmittedDependent(t *testing.T) {
-	decider := &journeyDependencyDecider{}
-	world := newJourneyWorldWithDecider(t, decider)
+func TestJourneyJ22ParentAndDependentRemainDistinctPendingJudgements(t *testing.T) {
+	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	grd := world.buildGRD()
 
 	parentRevision := ion.commitFile("auth.txt", "shared authentication base\n", "refactor authentication")
-	decider.parentRevision = parentRevision
 	parent := ion.run(grd, "submit")
 	if parent.err != nil {
 		t.Fatalf("submit held parent: %v\nstderr:\n%s", parent.err, parent.stderr)
@@ -174,96 +165,22 @@ func TestJourneyJ22PromotingParentReconsidersSubmittedDependent(t *testing.T) {
 		t.Fatal("dependent reached canonical main before its parent promoted")
 	}
 
-	// Retrying the frozen parent stands in for the later judgement event. The
-	// dependent itself is not resubmitted.
-	reconsiderPath := filepath.Join(t.TempDir(), "parent-reconsideration")
-	requireGitSuccess(t, "create parent reconsideration workspace", "-C", ion.path, "worktree", "add", "--detach", reconsiderPath, parentRevision)
-	reconsideration := (&journeyWorkspace{t: t, path: reconsiderPath, token: ion.token}).run(grd, "submit")
-	if reconsideration.err != nil {
-		t.Fatalf("reconsider parent: %v\nstderr:\n%s", reconsideration.err, reconsideration.stderr)
+	pending, err := world.server.judgement.PendingJudgements(context.Background(), world.server.repo.ID, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list pending judgements: %v", err)
 	}
-	const wantParentPromotion = "Submitted: refactor authentication\nPromoted\nYou can keep working.\n"
-	if reconsideration.stdout != wantParentPromotion {
-		t.Fatalf("parent reconsideration stdout = %q, want %q", reconsideration.stdout, wantParentPromotion)
+	if len(pending.Versions) != 2 || pending.Versions[0].Content.Revision != parentRevision || pending.Versions[1].Content.Revision != dependentRevision {
+		t.Fatalf("pending judgements = %#v, want parent then dependent", pending.Versions)
 	}
-	if got := world.canonicalHead(); got != dependentRevision {
-		t.Fatalf("canonical main = %q, want automatically reconsidered dependent %q", got, dependentRevision)
-	}
-	if got := world.currentIntent().ContentRef.Revision; got != dependentRevision {
-		t.Fatalf("current intent revision = %q, want dependent %q", got, dependentRevision)
-	}
-	parentCalls, dependentCalls := decider.calls()
-	if parentCalls != 2 || dependentCalls != 2 {
-		t.Fatalf("decision calls = parent %d, dependent %d; want 2 initial/reconsideration calls each", parentCalls, dependentCalls)
+	if !slices.Equal(pending.Versions[1].Dependencies, []intent.VersionID{pending.Versions[0].ID}) {
+		t.Fatalf("dependent dependencies = %q, want parent %q", pending.Versions[1].Dependencies, pending.Versions[0].ID)
 	}
 	status := ion.run(grd, "status")
 	if status.err != nil {
 		t.Fatalf("status after dependent promotion: %v\nstderr:\n%s", status.err, status.stderr)
 	}
-	const wantStatus = "Working: new change\nBased on: accepted intent\n"
+	const wantStatus = "Working: new change\nBased on:\n  add passkey support — judgement pending\n"
 	if status.stdout != wantStatus {
 		t.Fatalf("status after dependent promotion = %q, want %q", status.stdout, wantStatus)
 	}
-}
-
-type recordingDeferDecider struct {
-	mu        sync.Mutex
-	proposals []intent.Proposed
-}
-
-func (decider *recordingDeferDecider) DecidePromotion(_ context.Context, subject intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
-	decider.mu.Lock()
-	defer decider.mu.Unlock()
-	proposed := intent.Proposed{Change: subject.Change, Version: subject.Version}
-	decider.proposals = append(decider.proposals, proposed)
-	return intentservice.DeferPromotion, nil
-}
-
-func (decider *recordingDeferDecider) observed() []intent.Proposed {
-	decider.mu.Lock()
-	defer decider.mu.Unlock()
-	return slices.Clone(decider.proposals)
-}
-
-type deferThenPromoteDecider struct {
-	mu    sync.Mutex
-	calls int
-}
-
-func (decider *deferThenPromoteDecider) DecidePromotion(context.Context, intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
-	decider.mu.Lock()
-	defer decider.mu.Unlock()
-	decider.calls++
-	if decider.calls == 1 {
-		return intentservice.DeferPromotion, nil
-	}
-	return intentservice.PromoteNow, nil
-}
-
-type journeyDependencyDecider struct {
-	mu             sync.Mutex
-	parentRevision string
-	parentCalls    int
-	dependentCalls int
-}
-
-func (decider *journeyDependencyDecider) DecidePromotion(_ context.Context, subject intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
-	decider.mu.Lock()
-	defer decider.mu.Unlock()
-	proposed := intent.Proposed{Change: subject.Change, Version: subject.Version}
-	if proposed.Version.Content.Revision == decider.parentRevision {
-		decider.parentCalls++
-		if decider.parentCalls == 1 {
-			return intentservice.DeferPromotion, nil
-		}
-		return intentservice.PromoteNow, nil
-	}
-	decider.dependentCalls++
-	return intentservice.PromoteNow, nil
-}
-
-func (decider *journeyDependencyDecider) calls() (int, int) {
-	decider.mu.Lock()
-	defer decider.mu.Unlock()
-	return decider.parentCalls, decider.dependentCalls
 }

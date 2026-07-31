@@ -104,6 +104,8 @@ The matrix describes intended journeys, not the behaviour of the currently deplo
 
 ## Journey 1: submit and promote immediately
 
+The target journey still permits a no-op judge to promote immediately. The current executable slice stops after durable admission: `grd submit` reports pending judgement and neither intent nor canonical trunk moves. The promotion half resumes when the separate judgement runner exists; it is no longer simulated inside the submission request.
+
 Baseline:
 
 ```text
@@ -118,12 +120,12 @@ Workspace remains usable
 
 | ID | Deviation | Expected user contract | Disposition |
 |---|---|---|---|
-| J1.0 | Clean workspace, one commit, directly ahead of A | `grd submit` admits and immediately promotes B; the response reports both facts; local work is not destructively changed | First proof |
+| J1.0 | Clean workspace, one commit, directly ahead of A | `grd submit` durably admits B without moving A; a separate no-op judgement may later promote it | Admission proof executable; runner next |
 | J1.1 | Several commits form one deliverable | Submit them as one change version when the user selects or confirms that boundary | Native target |
 | J1.2 | Workspace contains uncommitted content | Do not guess whether the content belongs in the proposal; preserve it and explain the boundary required | Initial boundary |
 | J1.3 | Workspace is based on older accepted intent | Do not present the proposal as current; either reconsider it against current intent or give a safe reconciliation path | Open |
 | J1.4 | Workspace has mechanically diverged from accepted intent | Preserve all work and expose that reconciliation is needed; never overwrite either side | Initial boundary |
-| J1.5 | The same submission is retried after a lost response | Return the same admitted change/version and promotion rather than creating duplicates | First proof |
+| J1.5 | The same submission is retried after a lost response | Return the same admitted change/version and the same single pending judgement rather than creating duplicates | Executable proof |
 | J1.6 | One submitted snapshot contains independently treatable concerns | Admit it without pretending commit boundaries settle the issue; judgement may later split it with preserved provenance | Native target |
 | J1.7 | Content cannot be inspected fully, such as an opaque binary | Admission can still succeed, but judgement must expose its evidence limits and may choose a different consequence | Native target |
 | J1.8 | An agent submits instead of a human | The mechanics remain the same; authority and provenance determine what the agent may do | Native target |
@@ -138,7 +140,7 @@ Promoted
 You can keep working.
 ```
 
-Stable semantic rule: successful submission means durable admission. Promotion may also finish and be reported during the interaction, but clients must not require every judgement to finish synchronously.
+Stable semantic rule: successful submission means durable admission. The current submission request always returns pending; a future client interaction may also observe a promotion completed by the separate runner, but admission never depends on synchronous judgement.
 
 ## Journey 2: submit, hold, continue, and stack
 
@@ -235,7 +237,7 @@ Your dependent work was rebased successfully.
 
 Journey 3 is expected to expose the clearest capability gradient: a jj-aware client may represent change evolution directly; a thin `grd` client over Git may need guarded rewrites and recovery refs; plain Git may only support a reduced, more manual reconciliation experience.
 
-The executable Git-adapter proofs keep B and B′ as immutable versions of one change and record the repository rationale. For J3.0, the ordinary judgement path promotes B′ and `grd sync` replays a clean local C onto it. For J3.1, a clean workspace still at B moves directly to accepted B′ without invoking descendant replay. Both reconciliation paths first create `refs/grd/recovery/<original-head>`. For J3.2, a mechanical replay conflict restores C, admits it with Change/Version identity, and records durable B → B′ reconciliation work for judgement without moving accepted intent or trunk. Repository-scoped conflict discovery survives restart and returns that work in recording order without introducing a second queue model. Repository-side resolution accepts engine-produced C′ as a new immutable Version of C, records the resolution atomically, and sends C′ through the ordinary judgement path, which may promote or defer it; the original conflict remains history and its read state becomes `resolved`.
+The executable Git-adapter proofs keep B and B′ as immutable versions of one change and record the repository rationale. For J3.0, the fixture explicitly promotes pending B′ and `grd sync` replays a clean local C onto it. For J3.1, a clean workspace still at B moves directly to accepted B′ without invoking descendant replay. Both reconciliation paths first create `refs/grd/recovery/<original-head>`. For J3.2, a mechanical replay conflict restores C, admits it with Change/Version identity, and records durable B → B′ reconciliation work for judgement without moving accepted intent or trunk. Repository-scoped conflict discovery survives restart and returns that work in recording order without introducing a second queue model. Repository-side resolution accepts engine-produced C′ as a new immutable Version of C and records the resolution atomically; C′ remains pending until the fixture explicitly promotes it. The original conflict remains history and its read state becomes `resolved`.
 
 The J3.2 portal is `grd sync`. A recorded C′ may itself remain in judgement; `grd status` shows that honestly and sync does not move until C′ is promoted. Once accepted, the client validates the exact B′ intent → C′ promotion lineage, fetches C′, protects the current workspace with `refs/grd/recovery/<original-head>`, replaces C with C′, and replays only commits made after captured C. With no newer work the workspace moves directly to C′. If newer replay conflicts, Git aborts the replay and the exact clean pre-sync workspace is restored; the durable resolution remains available for another attempt. The current Git adapter also refuses merge-containing newer history rather than silently flattening it. Continuation state is cleared only after success. If Git completed but state cleanup was interrupted, a retry recognizes C′ beneath the current HEAD and finishes without replaying work twice. `grd status` exposes the resolution rationale before sync without making the user handle conflict, change, or version IDs. Git-reported paths remain diagnostics; the Git adapter orchestrates fetch/reset/rebase rather than implementing a merge engine, while jj-core remains the intended owner of first-class conflicted content and descendant rebasing.
 

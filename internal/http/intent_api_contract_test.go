@@ -80,16 +80,16 @@ func TestNativeIntentAPIUsesRealGitProjection(t *testing.T) {
 	if receipt.Change.ID == "" || receipt.Version.ID == "" || receipt.Version.Producer != "control-api" {
 		t.Fatalf("proposal receipt identities = %#v", receipt)
 	}
-	if receipt.State != "admitted" || receipt.Promotion == nil || receipt.Promotion.ID == "" {
-		t.Fatalf("proposal receipt outcome = %#v, want admitted with completed promotion", receipt)
+	if receipt.State != "pending_judgement" || receipt.Promotion != nil {
+		t.Fatalf("proposal receipt outcome = %#v, want durable pending judgement", receipt)
 	}
 
 	remoteMain, err := runGitForTest("ls-remote", remote, "refs/heads/main")
 	if err != nil {
 		t.Fatalf("read promoted main: %v\n%s", err, remoteMain)
 	}
-	if fields := strings.Fields(remoteMain); len(fields) != 2 || fields[0] != proposedCommit {
-		t.Fatalf("remote main = %q, want %s", remoteMain, proposedCommit)
+	if fields := strings.Fields(remoteMain); len(fields) != 2 || fields[0] != initialCommit {
+		t.Fatalf("remote main = %q, want unchanged %s", remoteMain, initialCommit)
 	}
 
 	res, body = request(t, fixture.handler, http.MethodGet, "/v1/repos/"+fixture.repo.ID+"/changes/"+receipt.Change.ID, controlAuthorization, "", "")
@@ -107,8 +107,8 @@ func TestNativeIntentAPIUsesRealGitProjection(t *testing.T) {
 	if change.ID != receipt.Change.ID {
 		t.Fatalf("change id = %q, want %q", change.ID, receipt.Change.ID)
 	}
-	if change.LatestVersion.ID != receipt.Version.ID || change.LatestPromotion == nil || change.LatestPromotion.ID != receipt.Promotion.ID {
-		t.Fatalf("change summary = %#v, want latest version and promotion from receipt", change)
+	if change.LatestVersion.ID != receipt.Version.ID || change.LatestPromotion != nil {
+		t.Fatalf("change summary = %#v, want pending latest version without promotion", change)
 	}
 
 	res, body = request(t, fixture.handler, http.MethodGet, "/v1/repos/"+fixture.repo.ID+"/changes/"+receipt.Change.ID+"/versions?limit=1", controlAuthorization, "", "")

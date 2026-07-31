@@ -194,6 +194,44 @@ func (ledger *Ledger) Versions(ctx context.Context, changeID intent.ChangeID, af
 	return versions, end < len(ids), nil
 }
 
+func (ledger *Ledger) PendingJudgements(ctx context.Context, after intent.VersionID, limit int) ([]intent.Version, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return nil, false, errors.New("journal is closed")
+	}
+	start := 0
+	if after != "" {
+		start = -1
+		for index, id := range ledger.state.judgementIDs {
+			if id == after {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, false, intent.ErrVersionNotFound
+		}
+	}
+	versions := make([]intent.Version, 0, limit)
+	index := start
+	for ; index < len(ledger.state.judgementIDs) && len(versions) < limit; index++ {
+		id := ledger.state.judgementIDs[index]
+		if _, pending := ledger.state.pendingJudgements[id]; pending {
+			versions = append(versions, cloneVersion(ledger.state.versions[id]))
+		}
+	}
+	for ; index < len(ledger.state.judgementIDs); index++ {
+		if _, pending := ledger.state.pendingJudgements[ledger.state.judgementIDs[index]]; pending {
+			return versions, true, nil
+		}
+	}
+	return versions, false, nil
+}
+
 func (ledger *Ledger) ProposalByIdempotencyKey(ctx context.Context, key string) (intent.Proposed, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return intent.Proposed{}, false, err

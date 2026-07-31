@@ -680,9 +680,9 @@ GET  /v1/repos/{repoID}/changes/{changeID}/versions
 
 `POST /proposals` requires a repository-scoped idempotency key and accepts a base intent plus an engine-neutral content reference. It is a command that creates a `Change` and immutable `ChangeVersion`; it does not introduce a separate Proposal resource.
 
-The response always returns the admitted change and version. It may include a completed promotion when the current judgement implementation finishes during the request, but clients must not depend on synchronous promotion. A held or stale-base proposal remains a successful admission.
+The response always returns the admitted change and version as `pending_judgement`. It does not run judgement or promotion inside the request. A held or stale-base proposal therefore remains a successful admission; a future interaction may report a separately completed promotion without changing that meaning.
 
-The current implementation uses an approve-all application service that invokes the separate domain operations `Propose` and `Promote`. HTTP validates and maps the wire contract; it does not own that lifecycle. There is no public promotion endpoint: promotion remains an outcome chosen through repository judgement.
+The application service exposes `Propose` and `Promote` as separate internal domain operations. HTTP validates and maps proposal admission only; it does not own the lifecycle. There is no public promotion endpoint: promotion remains an outcome chosen through repository judgement.
 
 `GET /intent` returns accepted content only. Change inspection returns the latest immutable version and its promotion when completed. Full version history is exposed separately through a bounded, cursor-based endpoint so the change summary cannot grow without limit.
 
@@ -726,7 +726,7 @@ The temporary operational sequence is:
 ```text
 git push <candidate ref>       # transport stores content
 propose(baseIntent, contentRef) # native domain admits a change version
-judge                          # currently approve-all
+judge                          # separate runner; not implemented in this slice
 promote                        # only this moves canonical trunk
 ```
 
@@ -842,7 +842,7 @@ Repository amendment remains an internal judgement operation. The executable J3 
 
 Recording a reconciliation conflict is different from commanding judgement. It is an authenticated adapter report that an existing immutable descendant Version C could not be replayed from original B onto accepted amendment B′ at an exact current intent. B′ may already be historical if unrelated accepted work followed it; the request must CAS the actual integration base and B′ must remain in its ancestry. C is admitted first through the ordinary proposal boundary, so the conflict preserves rather than manufactures its Change/Version identity. The repository assigns only the durable Conflict identity and records the authenticated reporter separately from C's author; subsequent judgement remains internal.
 
-The current judgement seam is deliberately narrow: a `PromotionDecider` receives a `JudgementSubject` containing one change and one immutable version, then returns `PromoteNow` or `DeferPromotion`. This does not claim to model the eventual plans, tools, tests, amendments, human reviews, or multi-step judgement process.
+The current service deliberately has no synchronous judgement seam. Every operation that creates a judgeable Version returns after recording it as pending. A later runner may execute plans, tools, tests, amendments, human reviews, or direct promotion; those concepts are not compressed into a boolean decision on the write request.
 
 Absence of a completed promotion means only “judgement pending.” It does not prove an explicit hold. The Git client may record a local continuation cursor, but it must not claim to have created a durable empty successor change. `grd status` checks ancestry before saying the workspace is based on accepted intent.
 
@@ -915,7 +915,7 @@ The VCS engine or judgement arm produces concrete C′ content. The repository t
 
 The conflict read model derives `awaiting_judgement` when no resolution exists and `resolved` when the immutable resolution fact exists against current intent. If that unresolved attempt or its unpromoted C′ falls behind a newer accepted intent, reads derive `superseded` without rewriting either fact. Retrying the same operation-typed idempotency key returns the same C′ and resolution, including after restart. Reusing that key for different input fails.
 
-Resolution and promotion remain separate domain outcomes. The current approve-all service may immediately run the ordinary judgement and promotion path after recording a resolution, but the resolution record does not itself move canonical intent. If accepted intent is no longer the exact expected integration base, that attempt fails closed; Resolution 015 defines how stale held work is reconsidered without pretending the original B → B′ replacement is happening again.
+Resolution and promotion remain separate domain outcomes. Recording a resolution leaves its new Version pending; only a later explicit promotion operation may move canonical intent. If accepted intent is no longer the exact expected integration base, that attempt fails closed; Resolution 015 defines how stale held work is reconsidered without pretending the original B → B′ replacement is happening again.
 
 Repository-side resolution is currently an in-process judgement command, not a public HTTP mutation endpoint. Existing conflict GETs expose the derived state and resolution fact. Resolution 014 defines the implemented Git-client portal that brings C′ back into a workspace after ordinary judgement accepts it.
 
@@ -974,7 +974,7 @@ The repository distinguishes two transitions:
 - `DependentReconciliation` records the causal B → B′ rewrite and produces C′ while preserving C's Change identity; and
 - `HeldVersionRebase` records the later mechanical C′@D → C″@E transition when accepted intent advances before C′ is promoted.
 
-`HeldVersionRebase` is an internal, engine-neutral operation. It requires the exact latest unpromoted version and exact current intent, requires the old base to be in current intent's ancestry, admits a new immutable Version of the same Change, preserves its dependencies, and records old/new Version and Intent identities plus rationale. Producing C″ still does not promote it; the service sends C″ through ordinary judgement.
+`HeldVersionRebase` is an internal, engine-neutral operation. It requires the exact latest unpromoted version and exact current intent, requires the old base to be in current intent's ancestry, admits a new immutable Version of the same Change, preserves its dependencies, and records old/new Version and Intent identities plus rationale. Producing C″ still does not promote it; C″ enters the same durable pending-judgement projection as every other new Version.
 
 Candidates are derived from immutable reconciliation and resolution history plus each Change's latest Version. No pending flag, mutable lifecycle enum, or second queue is persisted. The filesystem ledger stores the rebase fact and operation-typed idempotency record, so exact retry after restart returns the same C″. Repeated intent advances can derive the latest held Version again without relabelling the original B → B′ provenance.
 
@@ -991,3 +991,29 @@ The filesystem prototype discovers work by scanning immutable reconciliation/con
 ### Agreed ownership rule
 
 > Dependency replacement explains why C first changed; later intent movement rebases held C as held work, and every resulting Version still faces ordinary judgement.
+
+## Resolution 016: every judgeable Version becomes durably pending before any judge runs
+
+**Status:** Agreed and implemented for the durable-pending slice
+
+### Reservation
+
+Proposal content and identity were durable, but the service invoked its promotion decider inside the admission request. Judge availability therefore affected the request, and a missing promotion could mean several different things without the repository being able to enumerate work that still required judgement. Retrying or reopening a repository could also invoke the decider as an incidental side effect of an unrelated read.
+
+Persisting a second mutable queue beside the version ledger would create a crash gap and a competing lifecycle authority.
+
+### Resolution
+
+Every newly judgeable Version enters a durable pending-judgement projection as part of the same ledger fact that creates the Version. Proposal, amendment, dependent reconciliation, conflict resolution, and held-version rebase all follow that invariant. An operation-typed idempotent retry reuses the same Version and therefore cannot duplicate pending work.
+
+When a new Version supersedes an older Version of the same Change, pending judgement moves to the replacement. When promotion is prepared, the Version leaves pending judgement even if trunk/ledger reconciliation has not completed: at that point judgement has produced a promotion attempt, and the prepared-promotion recovery path owns the remaining work.
+
+The filesystem ledger stores no second queue record or mutable workflow enum. It reconstructs an ordered pending index by replaying immutable Version-creation, supersession, and promotion-preparation facts. This is a consumer query over repository history and can later map to a narrow Postgres query without loading whole ledger state.
+
+Every Version-producing service operation now returns after its durable repository write: proposal, amendment, dependent reconciliation, conflict resolution, and held-version rebase. None invokes judgement or promotion as an incidental side effect. `Service.Promote` is a separate explicit internal operation. The proposal HTTP response reports `pending_judgement`; accepted intent and canonical trunk remain unchanged.
+
+This slice does not claim work, persist a judgement outcome, or execute an action plan. Those belong to the separate judgement runner. Executable journey fixtures call the explicit promotion operation when they need to stage an accepted outcome; that is test orchestration, not synchronous judgement hidden inside Version creation.
+
+### Agreed ownership rule
+
+> The repository records that a Version requires judgement; a separate runner decides and executes what happens to it.

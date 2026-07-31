@@ -28,6 +28,8 @@ type journalState struct {
 	versions          map[intent.VersionID]intent.Version
 	versionIDs        map[intent.ChangeID][]intent.VersionID
 	dependents        map[intent.VersionID][]intent.VersionID
+	pendingJudgements map[intent.VersionID]struct{}
+	judgementIDs      []intent.VersionID
 	amendments        map[intent.VersionID]intent.Amendment
 	reconciliations   map[intent.VersionID]intent.DependentReconciliation
 	reconciliationIDs []intent.VersionID
@@ -390,21 +392,22 @@ func validateCompletedPromotion(state *journalState, record journalRecord) error
 
 func newJournalState() journalState {
 	return journalState{
-		revisions:       make(map[intent.RevisionID]intent.Revision),
-		changes:         make(map[intent.ChangeID]intent.Change),
-		versions:        make(map[intent.VersionID]intent.Version),
-		versionIDs:      make(map[intent.ChangeID][]intent.VersionID),
-		dependents:      make(map[intent.VersionID][]intent.VersionID),
-		amendments:      make(map[intent.VersionID]intent.Amendment),
-		reconciliations: make(map[intent.VersionID]intent.DependentReconciliation),
-		rebases:         make(map[intent.VersionID]intent.HeldVersionRebase),
-		promotions:      make(map[intent.PromotionID]intent.Promotion),
-		prepared:        make(map[intent.PromotionID]intent.PreparedPromotion),
-		completed:       make(map[intent.VersionID]intent.PromotionID),
-		byIntent:        make(map[intent.RevisionID]intent.PromotionID),
-		conflicts:       make(map[intent.ConflictID]intent.ReconciliationConflict),
-		resolutions:     make(map[intent.ConflictID]intent.ReconciliationResolution),
-		idempotency:     make(map[string]idempotencyRecord),
+		revisions:         make(map[intent.RevisionID]intent.Revision),
+		changes:           make(map[intent.ChangeID]intent.Change),
+		versions:          make(map[intent.VersionID]intent.Version),
+		versionIDs:        make(map[intent.ChangeID][]intent.VersionID),
+		dependents:        make(map[intent.VersionID][]intent.VersionID),
+		pendingJudgements: make(map[intent.VersionID]struct{}),
+		amendments:        make(map[intent.VersionID]intent.Amendment),
+		reconciliations:   make(map[intent.VersionID]intent.DependentReconciliation),
+		rebases:           make(map[intent.VersionID]intent.HeldVersionRebase),
+		promotions:        make(map[intent.PromotionID]intent.Promotion),
+		prepared:          make(map[intent.PromotionID]intent.PreparedPromotion),
+		completed:         make(map[intent.VersionID]intent.PromotionID),
+		byIntent:          make(map[intent.RevisionID]intent.PromotionID),
+		conflicts:         make(map[intent.ConflictID]intent.ReconciliationConflict),
+		resolutions:       make(map[intent.ConflictID]intent.ReconciliationResolution),
+		idempotency:       make(map[string]idempotencyRecord),
 	}
 }
 
@@ -424,6 +427,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 				state.dependents[dependencyID] = append(state.dependents[dependencyID], record.Version.ID)
 			}
 			state.idempotency[record.IdempotencyKey] = idempotencyRecord{operation: proposalOperation, versionID: record.Version.ID}
+			beginPendingJudgement(state, record.Version.ID, "")
 		}
 	case amendmentRecorded:
 		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
@@ -434,6 +438,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			}
 			state.amendments[record.Version.ID] = *record.Amendment
 			state.idempotency[record.IdempotencyKey] = idempotencyRecord{operation: amendmentOperation, versionID: record.Version.ID}
+			beginPendingJudgement(state, record.Version.ID, record.Amendment.FromVersion)
 		}
 	case dependentReconciliationRecorded:
 		applyDependentReconciliation(state, record)
@@ -447,6 +452,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			prepared := intent.PreparedPromotion{Promotion: *record.Promotion, Intent: *record.NextIntent}
 			state.prepared[prepared.Promotion.ID] = prepared
 			state.pending = prepared.Promotion.ID
+			delete(state.pendingJudgements, prepared.Promotion.VersionID)
 		}
 	case promotionCompleted:
 		if _, exists := state.promotions[record.PromotionID]; !exists {
@@ -456,6 +462,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			state.completed[prepared.Promotion.VersionID] = prepared.Promotion.ID
 			state.byIntent[prepared.Promotion.ToIntent] = prepared.Promotion.ID
 			state.current = prepared.Intent
+			delete(state.pendingJudgements, prepared.Promotion.VersionID)
 			delete(state.prepared, prepared.Promotion.ID)
 			state.pending = ""
 		}
@@ -466,6 +473,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			state.completed[record.Promotion.VersionID] = record.Promotion.ID
 			state.byIntent[record.Promotion.ToIntent] = record.Promotion.ID
 			state.current = *record.NextIntent
+			delete(state.pendingJudgements, record.Promotion.VersionID)
 		}
 	case reconciliationConflictRecorded:
 		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
@@ -481,6 +489,15 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 	case reconciliationResolutionRecorded:
 		applyReconciliationResolution(state, record)
 	}
+}
+
+func beginPendingJudgement(state *journalState, versionID, superseded intent.VersionID) {
+	delete(state.pendingJudgements, superseded)
+	if _, exists := state.pendingJudgements[versionID]; exists {
+		return
+	}
+	state.pendingJudgements[versionID] = struct{}{}
+	state.judgementIDs = append(state.judgementIDs, versionID)
 }
 
 func sameReconciliationConflict(left, right intent.ReconciliationConflict) bool {

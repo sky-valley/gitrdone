@@ -129,6 +129,7 @@ func applyDependentReconciliation(state *journalState, record journalRecord) {
 		operation: dependentReconciliationOperation,
 		versionID: version.ID,
 	}
+	beginPendingJudgement(state, version.ID, reconciliation.FromVersion)
 }
 
 func (ledger *Ledger) DependentReconciliations(ctx context.Context, after intent.VersionID, limit int) ([]intent.DependentReconciliation, bool, error) {

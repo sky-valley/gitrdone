@@ -58,6 +58,7 @@ func (ledger *transientLedger) RecordHeldVersionRebase(_ context.Context, key st
 		operation: transientHeldVersionRebaseOperation,
 		versionID: version.ID,
 	}
+	ledger.beginPendingJudgement(version.ID, rebase.FromVersion)
 	return nil
 }
 

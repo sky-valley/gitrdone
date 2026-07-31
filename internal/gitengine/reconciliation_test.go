@@ -55,6 +55,13 @@ func TestRepositoryRestartCompletesPromotionAlreadyProjectedByGit(t *testing.T) 
 	if err != nil || !found {
 		t.Fatalf("pending promotion = %#v, %t, error %v; want prepared, true, nil", prepared, found, err)
 	}
+	pendingJudgements, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list pending judgements: %v", err)
+	}
+	if len(pendingJudgements.Versions) != 0 {
+		t.Fatalf("pending judgements = %#v, want none after promotion was prepared", pendingJudgements.Versions)
+	}
 	if got := gitOutput(t, "--git-dir", fixture.gitDir, "rev-parse", "refs/heads/main"); got != fixture.proposed {
 		t.Fatalf("trunk after interrupted promotion = %q, want %q", got, fixture.proposed)
 	}

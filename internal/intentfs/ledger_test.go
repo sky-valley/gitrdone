@@ -76,6 +76,145 @@ func TestLedgerRestoresHeldVersionDependencies(t *testing.T) {
 	}
 }
 
+func TestLedgerRestoresOnePendingJudgementForAnIdempotentlyRetriedProposal(t *testing.T) {
+	ctx := context.Background()
+	journalPath := filepath.Join(t.TempDir(), "intent.journal")
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+
+	firstLedger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("open first ledger: %v", err)
+	}
+	firstRepository, err := intent.OpenRepository(ctx, initialContent, firstLedger, &recordingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("open first repository: %v", err)
+	}
+	proposal := intent.Proposal{
+		IdempotencyKey: "request-pending",
+		BaseIntent:     firstRepository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	}
+	proposed, err := firstRepository.Propose(ctx, proposal)
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if _, err := firstRepository.Propose(ctx, proposal); err != nil {
+		t.Fatalf("retry proposal before restart: %v", err)
+	}
+	if err := firstLedger.Close(); err != nil {
+		t.Fatalf("close first ledger: %v", err)
+	}
+
+	secondLedger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("reopen ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = secondLedger.Close() })
+	secondRepository, err := intent.OpenRepository(ctx, initialContent, secondLedger, &recordingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("reopen repository: %v", err)
+	}
+	if _, err := secondRepository.Propose(ctx, proposal); err != nil {
+		t.Fatalf("retry proposal after restart: %v", err)
+	}
+
+	pending, err := secondRepository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list restored pending judgements: %v", err)
+	}
+	if len(pending.Versions) != 1 || pending.Versions[0].ID != proposed.Version.ID {
+		t.Fatalf("restored pending judgements = %#v, want version %q once", pending.Versions, proposed.Version.ID)
+	}
+}
+
+func TestLedgerRestoresPendingJudgementPaginationAcrossPromotedAndSupersededHoles(t *testing.T) {
+	ctx := context.Background()
+	journalPath := filepath.Join(t.TempDir(), "intent.journal")
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+
+	firstLedger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("open first ledger: %v", err)
+	}
+	firstRepository, err := intent.OpenRepository(ctx, initialContent, firstLedger, &recordingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("open first repository: %v", err)
+	}
+	base := firstRepository.CurrentIntent()
+	proposals := make([]intent.Proposed, 0, 3)
+	for index, revision := range []string{"bbbbbbbb", "cccccccc", "dddddddd"} {
+		proposed, err := firstRepository.Propose(ctx, intent.Proposal{
+			IdempotencyKey: "pending-hole-" + revision,
+			BaseIntent:     base.ID,
+			Content:        intent.ContentRef{Engine: "git", Revision: revision},
+			Producer:       "actor-" + string(rune('a'+index)),
+		})
+		if err != nil {
+			t.Fatalf("propose %s: %v", revision, err)
+		}
+		proposals = append(proposals, proposed)
+	}
+	amended, err := firstRepository.Amend(ctx, intent.AmendRequest{
+		IdempotencyKey:  "pending-hole-amend-second",
+		ChangeID:        proposals[1].Change.ID,
+		ExpectedVersion: proposals[1].Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "c2c2c2c2"},
+		Producer:        "repository-agent",
+		Rationale:       "replace the second pending version",
+	})
+	if err != nil {
+		t.Fatalf("amend second proposal: %v", err)
+	}
+	if _, err := firstRepository.Promote(ctx, intent.PromoteRequest{
+		VersionID:      proposals[0].Version.ID,
+		ExpectedIntent: base.ID,
+	}); err != nil {
+		t.Fatalf("promote first proposal: %v", err)
+	}
+
+	want := []intent.VersionID{proposals[2].Version.ID, amended.Version.ID}
+	assertPendingJudgementPages(t, firstRepository, want)
+	if err := firstLedger.Close(); err != nil {
+		t.Fatalf("close first ledger: %v", err)
+	}
+
+	secondLedger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatalf("reopen ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = secondLedger.Close() })
+	secondRepository, err := intent.OpenRepository(ctx, initialContent, secondLedger, &recordingAdmission{}, &recordingProjection{current: proposals[0].Version.Content})
+	if err != nil {
+		t.Fatalf("reopen repository: %v", err)
+	}
+	assertPendingJudgementPages(t, secondRepository, want)
+}
+
+func assertPendingJudgementPages(t *testing.T, repository *intent.Repository, want []intent.VersionID) {
+	t.Helper()
+	ctx := context.Background()
+	var got []intent.VersionID
+	var cursor intent.VersionID
+	for {
+		page, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{After: cursor, Limit: 1})
+		if err != nil {
+			t.Fatalf("list pending judgements after %q: %v", cursor, err)
+		}
+		if len(page.Versions) != 1 {
+			t.Fatalf("pending judgement page after %q = %#v, want one version", cursor, page)
+		}
+		got = append(got, page.Versions[0].ID)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("pending judgement pages = %q, want %q", got, want)
+	}
+}
+
 func TestRepositoryRestoresIntentAndProposalIdempotencyFromJournal(t *testing.T) {
 	ctx := context.Background()
 	journalPath := filepath.Join(t.TempDir(), "intent.journal")

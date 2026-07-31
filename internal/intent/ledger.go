@@ -23,6 +23,10 @@ type ChangeStore interface {
 	RecordProposal(ctx context.Context, idempotencyKey string, change Change, version Version) error
 }
 
+type PendingJudgementStore interface {
+	PendingJudgements(ctx context.Context, after VersionID, limit int) ([]Version, bool, error)
+}
+
 type AmendmentStore interface {
 	Amendment(ctx context.Context, toVersion VersionID) (Amendment, bool, error)
 	AmendmentByIdempotencyKey(ctx context.Context, key string) (Amended, bool, error)
@@ -63,6 +67,7 @@ type ReconciliationConflictStore interface {
 type Ledger interface {
 	IntentStore
 	ChangeStore
+	PendingJudgementStore
 	AmendmentStore
 	DependentReconciliationStore
 	HeldVersionRebaseStore
@@ -78,6 +83,8 @@ type transientLedger struct {
 	versions          map[VersionID]Version
 	versionIDs        map[ChangeID][]VersionID
 	dependents        map[VersionID][]VersionID
+	pendingJudgements map[VersionID]struct{}
+	judgementIDs      []VersionID
 	amendments        map[VersionID]Amendment
 	reconciliations   map[VersionID]DependentReconciliation
 	reconciliationIDs []VersionID
@@ -209,6 +216,38 @@ func (ledger *transientLedger) Versions(_ context.Context, changeID ChangeID, af
 	return versions, end < len(ids), nil
 }
 
+func (ledger *transientLedger) PendingJudgements(_ context.Context, after VersionID, limit int) ([]Version, bool, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	start := 0
+	if after != "" {
+		start = -1
+		for index, id := range ledger.judgementIDs {
+			if id == after {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, false, ErrVersionNotFound
+		}
+	}
+	versions := make([]Version, 0, limit)
+	index := start
+	for ; index < len(ledger.judgementIDs) && len(versions) < limit; index++ {
+		id := ledger.judgementIDs[index]
+		if _, pending := ledger.pendingJudgements[id]; pending {
+			versions = append(versions, cloneVersion(ledger.versions[id]))
+		}
+	}
+	for ; index < len(ledger.judgementIDs); index++ {
+		if _, pending := ledger.pendingJudgements[ledger.judgementIDs[index]]; pending {
+			return versions, true, nil
+		}
+	}
+	return versions, false, nil
+}
+
 func (ledger *transientLedger) ProposalByIdempotencyKey(_ context.Context, key string) (Proposed, bool, error) {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
@@ -262,6 +301,8 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.versions = make(map[VersionID]Version)
 	ledger.versionIDs = make(map[ChangeID][]VersionID)
 	ledger.dependents = make(map[VersionID][]VersionID)
+	ledger.pendingJudgements = make(map[VersionID]struct{})
+	ledger.judgementIDs = nil
 	ledger.amendments = make(map[VersionID]Amendment)
 	ledger.reconciliations = make(map[VersionID]DependentReconciliation)
 	ledger.rebases = make(map[VersionID]HeldVersionRebase)
@@ -324,6 +365,7 @@ func (ledger *transientLedger) RecordProposal(_ context.Context, key string, cha
 		ledger.dependents[dependencyID] = append(ledger.dependents[dependencyID], version.ID)
 	}
 	ledger.idempotency[key] = transientIdempotencyRecord{operation: transientProposalOperation, versionID: version.ID}
+	ledger.beginPendingJudgement(version.ID, "")
 	return nil
 }
 
@@ -375,7 +417,17 @@ func (ledger *transientLedger) RecordAmendment(_ context.Context, key string, am
 	}
 	ledger.amendments[version.ID] = amendment
 	ledger.idempotency[key] = transientIdempotencyRecord{operation: transientAmendmentOperation, versionID: version.ID}
+	ledger.beginPendingJudgement(version.ID, amendment.FromVersion)
 	return nil
+}
+
+func (ledger *transientLedger) beginPendingJudgement(versionID, superseded VersionID) {
+	delete(ledger.pendingJudgements, superseded)
+	if _, exists := ledger.pendingJudgements[versionID]; exists {
+		return
+	}
+	ledger.pendingJudgements[versionID] = struct{}{}
+	ledger.judgementIDs = append(ledger.judgementIDs, versionID)
 }
 
 func cloneVersion(version Version) Version {
@@ -426,6 +478,7 @@ func (ledger *transientLedger) PreparePromotion(_ context.Context, prepared Prep
 	}
 	ledger.prepared[prepared.Promotion.ID] = prepared
 	ledger.pending = prepared.Promotion.ID
+	delete(ledger.pendingJudgements, prepared.Promotion.VersionID)
 	return nil
 }
 
@@ -444,6 +497,7 @@ func (ledger *transientLedger) CompletePromotion(_ context.Context, promotionID 
 	ledger.completed[prepared.Promotion.VersionID] = promotionID
 	ledger.byIntent[prepared.Promotion.ToIntent] = promotionID
 	ledger.current = prepared.Intent
+	delete(ledger.pendingJudgements, prepared.Promotion.VersionID)
 	delete(ledger.prepared, promotionID)
 	ledger.pending = ""
 	return nil

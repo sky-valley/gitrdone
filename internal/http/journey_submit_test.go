@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestJourneyJ10SubmitAndPromoteImmediately(t *testing.T) {
+func TestJourneyJ10SubmitCreatesPendingJudgementWithoutMovingIntent(t *testing.T) {
 	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	before := world.currentIntent()
@@ -15,7 +15,7 @@ func TestJourneyJ10SubmitAndPromoteImmediately(t *testing.T) {
 	if result.err != nil {
 		t.Fatalf("grd submit failed: %v\nstderr:\n%s", result.err, result.stderr)
 	}
-	const wantOutput = "Submitted: fix login timeout\nPromoted\nYou can keep working.\n"
+	const wantOutput = "Submitted: fix login timeout\nAdmitted; judgement pending\nContinue working on top of it.\n"
 	if result.stdout != wantOutput {
 		t.Fatalf("grd submit stdout = %q, want %q", result.stdout, wantOutput)
 	}
@@ -24,21 +24,18 @@ func TestJourneyJ10SubmitAndPromoteImmediately(t *testing.T) {
 	}
 
 	after := world.currentIntent()
-	if after.ID == before.ID {
-		t.Fatalf("accepted intent id remained %q after submission", after.ID)
+	if after.ID != before.ID || after.ContentRef.Revision != before.ContentRef.Revision {
+		t.Fatalf("submission moved accepted intent from %#v to %#v", before, after)
 	}
-	if after.ContentRef.Engine != "git" || after.ContentRef.Revision != proposedRevision {
-		t.Fatalf("accepted content = %s:%s, want git:%s", after.ContentRef.Engine, after.ContentRef.Revision, proposedRevision)
-	}
-	if got := world.canonicalHead(); got != proposedRevision {
-		t.Fatalf("canonical main = %q, want proposed revision %q", got, proposedRevision)
+	if got := world.canonicalHead(); got != before.ContentRef.Revision {
+		t.Fatalf("canonical main = %q, want accepted revision %q while %q awaits judgement", got, before.ContentRef.Revision, proposedRevision)
 	}
 	if !ion.isClean() {
 		t.Fatal("Ion workspace is dirty after submission")
 	}
 }
 
-func TestJourneyJ15RetryReturnsTheSamePromotion(t *testing.T) {
+func TestJourneyJ15RetryReturnsTheSamePendingAdmission(t *testing.T) {
 	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	ion.commitFile("retry.txt", "retry safely\n", "make retry safe")

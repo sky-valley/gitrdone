@@ -71,6 +71,16 @@ type Proposed struct {
 	Version Version
 }
 
+type PendingJudgementQuery struct {
+	After VersionID
+	Limit int
+}
+
+type PendingJudgementPage struct {
+	Versions   []Version
+	NextCursor VersionID
+}
+
 type PromoteRequest struct {
 	VersionID      VersionID
 	ExpectedIntent RevisionID
@@ -122,6 +132,7 @@ type Repository struct {
 	projection      TrunkProjection
 	intents         IntentStore
 	changes         ChangeStore
+	pending         PendingJudgementStore
 	amendments      AmendmentStore
 	reconciliations DependentReconciliationStore
 	rebases         HeldVersionRebaseStore
@@ -172,6 +183,7 @@ func OpenRepository(ctx context.Context, initial ContentRef, ledger Ledger, admi
 		projection:      projection,
 		intents:         ledger,
 		changes:         ledger,
+		pending:         ledger,
 		amendments:      ledger,
 		reconciliations: ledger,
 		rebases:         ledger,
@@ -264,6 +276,21 @@ func (repository *Repository) Versions(ctx context.Context, query VersionQuery) 
 		return VersionPage{}, fmt.Errorf("read change versions: %w", err)
 	}
 	page := VersionPage{Versions: versions}
+	if more && len(versions) > 0 {
+		page.NextCursor = versions[len(versions)-1].ID
+	}
+	return page, nil
+}
+
+func (repository *Repository) PendingJudgements(ctx context.Context, query PendingJudgementQuery) (PendingJudgementPage, error) {
+	if query.Limit < 1 || query.Limit > 100 {
+		return PendingJudgementPage{}, errors.New("pending judgement page limit must be between 1 and 100")
+	}
+	versions, more, err := repository.pending.PendingJudgements(ctx, query.After, query.Limit)
+	if err != nil {
+		return PendingJudgementPage{}, fmt.Errorf("read pending judgements: %w", err)
+	}
+	page := PendingJudgementPage{Versions: versions}
 	if more && len(versions) > 0 {
 		page.NextCursor = versions[len(versions)-1].ID
 	}

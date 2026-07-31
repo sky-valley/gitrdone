@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"os"
 	"os/exec"
@@ -10,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sky-valley/gitrdone/internal/intentservice"
+	"github.com/sky-valley/gitrdone/internal/intent"
 )
 
 type journeyWorld struct {
@@ -40,13 +41,9 @@ type journeyCommandResult struct {
 }
 
 func newJourneyWorld(t *testing.T) *journeyWorld {
-	return newJourneyWorldWithDecider(t, nil)
-}
-
-func newJourneyWorldWithDecider(t *testing.T, decider intentservice.PromotionDecider) *journeyWorld {
 	t.Helper()
 
-	server := newGitSmartHTTPFixtureWithDecider(t, "journey", decider)
+	server := newGitSmartHTTPFixture(t, "journey")
 	bootstrapToken := createRepoTokenFixture(t, server.handler, server.repo.ID, "readwrite", "journey-bootstrap")
 	canonicalRemote := server.tokenizedGitURL(bootstrapToken.Token)
 	seed := newGitWorktree(t, "README.md", "initial\n")
@@ -85,6 +82,24 @@ func (world *journeyWorld) currentIntent() journeyIntent {
 func (world *journeyWorld) canonicalHead() string {
 	world.t.Helper()
 	return gitRemoteRef(world.t, world.canonicalRemote, "refs/heads/main")
+}
+
+func (world *journeyWorld) pendingProposal(producer string) intent.Proposed {
+	world.t.Helper()
+	pending, err := world.server.judgement.PendingJudgements(context.Background(), world.server.repo.ID, intent.PendingJudgementQuery{Limit: 100})
+	if err != nil {
+		world.t.Fatalf("list pending judgements: %v", err)
+	}
+	for _, version := range pending.Versions {
+		if version.Producer == producer {
+			return intent.Proposed{
+				Change:  intent.Change{ID: version.ChangeID},
+				Version: version,
+			}
+		}
+	}
+	world.t.Fatalf("pending judgement for producer %q was not found", producer)
+	return intent.Proposed{}
 }
 
 func (world *journeyWorld) buildGRD() string {

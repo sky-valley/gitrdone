@@ -272,6 +272,89 @@ func TestRepositoryProposeThenPromoteAgainstCurrentIntent(t *testing.T) {
 	}
 }
 
+func TestRepositoryTracksAnAdmittedVersionAsPendingJudgementUntilPromotion(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, &recordingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	initial := repository.CurrentIntent()
+	proposal := intent.Proposal{
+		IdempotencyKey: "request-pending",
+		BaseIntent:     initial.ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion",
+	}
+	proposed, err := repository.Propose(ctx, proposal)
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if _, err := repository.Propose(ctx, proposal); err != nil {
+		t.Fatalf("retry proposal: %v", err)
+	}
+
+	pending, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list pending judgements: %v", err)
+	}
+	if len(pending.Versions) != 1 || !reflect.DeepEqual(pending.Versions[0], proposed.Version) {
+		t.Fatalf("pending judgements = %#v, want proposed version %#v", pending.Versions, proposed)
+	}
+
+	if _, err := repository.Promote(ctx, intent.PromoteRequest{VersionID: proposed.Version.ID, ExpectedIntent: initial.ID}); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	pending, err = repository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list pending judgements after promotion: %v", err)
+	}
+	if len(pending.Versions) != 0 {
+		t.Fatalf("pending judgements after promotion = %#v, want none", pending.Versions)
+	}
+}
+
+func TestRepositoryPaginatesPendingJudgementsInVersionCreationOrder(t *testing.T) {
+	ctx := context.Background()
+	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewRepository(initialContent, &recordingAdmission{}, &recordingProjection{current: initialContent})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	base := repository.CurrentIntent()
+	var proposed []intent.Proposed
+	for index, revision := range []string{"bbbbbbbb", "cccccccc", "dddddddd"} {
+		candidate, err := repository.Propose(ctx, intent.Proposal{
+			IdempotencyKey: "request-" + revision,
+			BaseIntent:     base.ID,
+			Content:        intent.ContentRef{Engine: "git", Revision: revision},
+			Producer:       "actor-" + string(rune('a'+index)),
+		})
+		if err != nil {
+			t.Fatalf("propose %s: %v", revision, err)
+		}
+		proposed = append(proposed, candidate)
+	}
+	if _, err := repository.Promote(ctx, intent.PromoteRequest{VersionID: proposed[0].Version.ID, ExpectedIntent: base.ID}); err != nil {
+		t.Fatalf("promote first version: %v", err)
+	}
+
+	first, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first.Versions) != 1 || first.Versions[0].ID != proposed[1].Version.ID || first.NextCursor != proposed[1].Version.ID {
+		t.Fatalf("first page = %#v, want second proposal and cursor", first)
+	}
+	second, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{After: first.NextCursor, Limit: 1})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second.Versions) != 1 || second.Versions[0].ID != proposed[2].Version.ID || second.NextCursor != "" {
+		t.Fatalf("second page = %#v, want final proposal without cursor", second)
+	}
+}
+
 func TestRepositoryReadsAProposedChangeAndItsVersions(t *testing.T) {
 	ctx := context.Background()
 	initial := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}

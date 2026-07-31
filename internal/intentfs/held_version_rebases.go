@@ -80,6 +80,7 @@ func applyHeldVersionRebase(state *journalState, record journalRecord) {
 		operation: heldVersionRebaseOperation,
 		versionID: version.ID,
 	}
+	beginPendingJudgement(state, version.ID, rebase.FromVersion)
 }
 
 func (ledger *Ledger) HeldVersionRebase(ctx context.Context, toVersion intent.VersionID) (intent.HeldVersionRebase, bool, error) {

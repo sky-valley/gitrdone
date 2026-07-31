@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,7 +13,7 @@ import (
 	"github.com/sky-valley/gitrdone/internal/intentservice"
 )
 
-func TestNativeIntentAPIAdmitsAndImmediatelyPromotesAProposal(t *testing.T) {
+func TestNativeIntentAPIAdmitsAProposalAsPendingJudgement(t *testing.T) {
 	repository, projection := newRepository(t)
 	initial := repository.CurrentIntent()
 	handlers := intentapi.NewHandlers(intentservice.New(staticResolver{repository: repository}))
@@ -72,20 +71,17 @@ func TestNativeIntentAPIAdmitsAndImmediatelyPromotesAProposal(t *testing.T) {
 	if receipt.Version.ContentRef.Engine != "git" || receipt.Version.ContentRef.Revision != "bbbbbbbb" {
 		t.Fatalf("content ref = %#v, want git:bbbbbbbb", receipt.Version.ContentRef)
 	}
-	if receipt.State != "admitted" {
-		t.Fatalf("state = %q, want admitted", receipt.State)
+	if receipt.State != "pending_judgement" {
+		t.Fatalf("state = %q, want pending_judgement", receipt.State)
 	}
-	if receipt.Promotion == nil || receipt.Promotion.ID == "" {
-		t.Fatalf("promotion = %#v, want completed promotion", receipt.Promotion)
+	if receipt.Promotion != nil {
+		t.Fatalf("promotion = %#v, want none", receipt.Promotion)
 	}
-	if receipt.Promotion.Version != receipt.Version.ID || receipt.Promotion.FromIntent != string(initial.ID) {
-		t.Fatalf("promotion = %#v, want version %q from %q", receipt.Promotion, receipt.Version.ID, initial.ID)
+	if got := repository.CurrentIntent(); got != initial {
+		t.Fatalf("current intent = %#v, want unchanged %#v", got, initial)
 	}
-	if got := repository.CurrentIntent(); string(got.ID) != receipt.Promotion.ToIntent || got.Content.Revision != "bbbbbbbb" {
-		t.Fatalf("current intent = %#v, want promoted receipt", got)
-	}
-	if len(projection.advances) != 1 {
-		t.Fatalf("projection advances = %d, want 1", len(projection.advances))
+	if len(projection.advances) != 0 {
+		t.Fatalf("projection advances = %d, want none", len(projection.advances))
 	}
 
 	retry := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/proposals", bytes.NewReader(requestBody))
@@ -106,8 +102,8 @@ func TestNativeIntentAPIAdmitsAndImmediatelyPromotesAProposal(t *testing.T) {
 	if !mapsEqual(first, retried) {
 		t.Fatalf("retry receipt = %#v, want %#v", retried, first)
 	}
-	if len(projection.advances) != 1 {
-		t.Fatalf("projection advances after retry = %d, want 1", len(projection.advances))
+	if len(projection.advances) != 0 {
+		t.Fatalf("projection advances after retry = %d, want none", len(projection.advances))
 	}
 }
 
@@ -147,48 +143,11 @@ func TestNativeIntentAPIKeepsAdmissionSuccessSeparateFromPromotion(t *testing.T)
 		Promotion json.RawMessage `json:"promotion"`
 	}
 	decodeResponse(t, recorder, &receipt)
-	if receipt.State != "admitted" {
-		t.Fatalf("state = %q, want admitted", receipt.State)
+	if receipt.State != "pending_judgement" {
+		t.Fatalf("state = %q, want pending_judgement", receipt.State)
 	}
 	if len(receipt.Promotion) != 0 && !bytes.Equal(receipt.Promotion, []byte("null")) {
 		t.Fatalf("promotion = %s, want absent or null", receipt.Promotion)
-	}
-}
-
-func TestNativeIntentAPIReturnsDurableAdmissionWhenPromotionDecisionFails(t *testing.T) {
-	repository, _ := newRepository(t)
-	baseIntent := repository.CurrentIntent()
-	handlers := intentapi.NewHandlers(intentservice.NewWithPromotionDecider(staticResolver{repository: repository}, failingDecider{}))
-	request := httptest.NewRequest(http.MethodPost, "/v1/repos/repo_123/proposals", bytes.NewBufferString(`{
-		"baseIntent":"`+string(baseIntent.ID)+`",
-		"contentRef":{"engine":"git","revision":"bbbbbbbb"}
-	}`))
-	request.SetPathValue("repoID", "repo_123")
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Idempotency-Key", "decision-failure")
-	recorder := httptest.NewRecorder()
-
-	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "ion"))
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want admitted 200: %s", recorder.Code, recorder.Body.String())
-	}
-	var receipt struct {
-		State   string `json:"state"`
-		Version struct {
-			ID string `json:"id"`
-		} `json:"version"`
-		Promotion json.RawMessage `json:"promotion"`
-	}
-	decodeResponse(t, recorder, &receipt)
-	if receipt.State != "admitted" || receipt.Version.ID == "" {
-		t.Fatalf("receipt = %#v, want durable admission", receipt)
-	}
-	if len(receipt.Promotion) != 0 && !bytes.Equal(receipt.Promotion, []byte("null")) {
-		t.Fatalf("promotion = %s, want absent or null", receipt.Promotion)
-	}
-	if got := repository.CurrentIntent(); got != baseIntent {
-		t.Fatalf("current intent = %#v, want unchanged %#v", got, baseIntent)
 	}
 }
 
@@ -427,12 +386,6 @@ func (acceptingAdmission) Admit(context.Context, intent.VersionID, intent.Conten
 
 type rejectingAdmission struct {
 	err error
-}
-
-type failingDecider struct{}
-
-func (failingDecider) DecidePromotion(context.Context, intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
-	return "", errors.New("promotion decision unavailable")
 }
 
 func (admission rejectingAdmission) Admit(context.Context, intent.VersionID, intent.ContentRef) error {

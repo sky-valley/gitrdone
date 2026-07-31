@@ -72,6 +72,13 @@ func TestRepositoryRebasesStaleHeldReconciliationAgainstCurrentIntent(t *testing
 		rebased.Rebase.Rationale != request.Rationale {
 		t.Fatalf("held version rebase = %#v, want immutable C prime to C double-prime fact", rebased.Rebase)
 	}
+	pending, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list pending judgements: %v", err)
+	}
+	if len(pending.Versions) != 1 || pending.Versions[0].ID != rebased.Version.ID {
+		t.Fatalf("pending judgements = %#v, want rebased version %q only", pending.Versions, rebased.Version.ID)
+	}
 	retried, err := repository.RebaseHeldVersion(ctx, request)
 	if err != nil {
 		t.Fatalf("retry held version rebase: %v", err)

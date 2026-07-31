@@ -6,8 +6,7 @@ import (
 )
 
 func TestJourneyRepositoryAmendmentUpdatesWorkspaceWithoutDescendants(t *testing.T) {
-	decider := &deferIonDecider{}
-	world := newJourneyWorldWithDecider(t, decider)
+	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	grd := world.buildGRD()
 
@@ -15,10 +14,7 @@ func TestJourneyRepositoryAmendmentUpdatesWorkspaceWithoutDescendants(t *testing
 	if result := ion.run(grd, "submit"); result.err != nil {
 		t.Fatalf("submit original change: %v\nstdout:\n%sstderr:\n%s", result.err, result.stdout, result.stderr)
 	}
-	original, ok := decider.original()
-	if !ok {
-		t.Fatal("decider did not observe Ion's original change")
-	}
+	original := world.pendingProposal("ion")
 
 	repositoryAgent := world.cloneWorkspace("repository-agent")
 	amendedRevision := repositoryAgent.commitFile("feature.txt", "safe\n", "repair authorization boundary")

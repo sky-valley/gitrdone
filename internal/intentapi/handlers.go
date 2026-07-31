@@ -208,7 +208,7 @@ func admitProposalHandler(service *intentservice.Service) http.Handler {
 		if !ok {
 			return
 		}
-		admission, err := service.Propose(r.Context(), repoID, intentservice.Proposal{
+		proposed, err := service.Propose(r.Context(), repoID, intentservice.Proposal{
 			IdempotencyKey: idempotencyKey,
 			BaseIntent:     intent.RevisionID(body.BaseIntent),
 			Producer:       authenticatedProducer(r),
@@ -218,19 +218,15 @@ func admitProposalHandler(service *intentservice.Service) http.Handler {
 				Revision: body.ContentRef.Revision,
 			},
 		})
-		if err != nil && admission.Proposed.Version.ID == "" {
+		if err != nil {
 			writeProposalError(w, err)
 			return
 		}
 
 		receipt := proposalReceipt{
-			Change:  mapChange(admission.Proposed.Change),
-			Version: mapVersion(admission.Proposed.Version),
-			State:   "admitted",
-		}
-		if admission.Promotion != nil {
-			mapped := mapPromotion(admission.Promotion.Promotion)
-			receipt.Promotion = &mapped
+			Change:  mapChange(proposed.Change),
+			Version: mapVersion(proposed.Version),
+			State:   "pending_judgement",
 		}
 
 		writeJSON(w, http.StatusOK, receipt)

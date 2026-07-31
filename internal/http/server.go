@@ -13,7 +13,6 @@ type Config struct {
 	BaseURL              string
 	ControlBearer        string
 	StorageRoot          string
-	PromotionDecider     intentservice.PromotionDecider
 	MaxLFSObjectBytes    int64
 	AccessLog            io.Writer
 	TrustedProxyPrefixes []netip.Prefix
@@ -55,7 +54,7 @@ func buildServer(config Config, repos repoStore, idempotency idempotencyDoer, gi
 		idempotency = newMemoryIdempotencyStore(nil)
 	}
 	intentRepositories := newIntentRepositoryRegistry(config.StorageRoot, repos, gitStorage)
-	judgement := intentservice.NewWithPromotionDecider(intentRepositories, config.PromotionDecider)
+	judgement := intentservice.New(intentRepositories)
 	intentHandlers := intentapi.NewHandlers(judgement)
 
 	mux := NewMux(Handlers{

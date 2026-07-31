@@ -12,7 +12,7 @@ import (
 	"github.com/sky-valley/gitrdone/internal/intentservice"
 )
 
-func TestReconciliationResolutionPromotesRealGitContentAndSurvivesRegistryRestart(t *testing.T) {
+func TestReconciliationResolutionRemainsPendingUntilExplicitPromotionAndSurvivesRegistryRestart(t *testing.T) {
 	ctx := context.Background()
 	storageRoot := t.TempDir()
 	storage := newFilesystemGitStorage(storageRoot)
@@ -123,15 +123,25 @@ func TestReconciliationResolutionPromotesRealGitContentAndSurvivesRegistryRestar
 	}
 	judgement := intentservice.New(firstRegistry)
 
-	receipt, err := judgement.ResolveReconciliationConflict(ctx, formatRepoControlID(repo.ID), request)
+	resolved, err := judgement.ResolveReconciliationConflict(ctx, formatRepoControlID(repo.ID), request)
 	if err != nil {
-		t.Fatalf("resolve and judge conflict: %v", err)
+		t.Fatalf("resolve conflict: %v", err)
 	}
-	if receipt.Resolved.Change.ID != descendant.Change.ID || receipt.Resolved.Version.ID == descendant.Version.ID {
-		t.Fatalf("resolved identity = %#v, want new version of C", receipt.Resolved)
+	if resolved.Change.ID != descendant.Change.ID || resolved.Version.ID == descendant.Version.ID {
+		t.Fatalf("resolved identity = %#v, want new version of C", resolved)
 	}
-	if receipt.Promotion == nil || receipt.Promotion.Promotion.VersionID != receipt.Resolved.Version.ID {
-		t.Fatalf("resolution promotion = %#v, want normal promotion of C prime", receipt.Promotion)
+	if got := strings.TrimSpace(runIntentTestGit(t, "--git-dir", gitDir, "rev-parse", "refs/heads/main")); got != amendedCommit {
+		t.Fatalf("canonical trunk before judgement = %q, want B prime %q", got, amendedCommit)
+	}
+	resolutionPromotion, err := judgement.Promote(ctx, formatRepoControlID(repo.ID), intent.PromoteRequest{
+		VersionID:      resolved.Version.ID,
+		ExpectedIntent: promoted.Intent.ID,
+	})
+	if err != nil {
+		t.Fatalf("promote resolved conflict: %v", err)
+	}
+	if resolutionPromotion.Promotion.VersionID != resolved.Version.ID {
+		t.Fatalf("resolution promotion = %#v, want C prime", resolutionPromotion)
 	}
 	if got := strings.TrimSpace(runIntentTestGit(t, "--git-dir", gitDir, "rev-parse", "refs/heads/main")); got != resolvedCommit {
 		t.Fatalf("canonical trunk = %q, want resolved C prime %q", got, resolvedCommit)
@@ -151,8 +161,8 @@ func TestReconciliationResolutionPromotesRealGitContentAndSurvivesRegistryRestar
 	if err != nil {
 		t.Fatalf("retry resolution after registry restart: %v", err)
 	}
-	if !reflect.DeepEqual(retried, receipt) {
-		t.Fatalf("retried receipt = %#v, want %#v", retried, receipt)
+	if !reflect.DeepEqual(retried, resolved) {
+		t.Fatalf("retried resolution = %#v, want %#v", retried, resolved)
 	}
 	restartedRepositoryService, err := restartedRegistry.Resolve(ctx, formatRepoControlID(repo.ID))
 	if err != nil {

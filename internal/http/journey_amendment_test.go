@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/sky-valley/gitrdone/internal/intent"
@@ -14,8 +13,7 @@ import (
 )
 
 func TestJourneyRepositoryAmendsHeldChangeAndSyncReplaysLocalContinuation(t *testing.T) {
-	decider := &deferIonDecider{}
-	world := newJourneyWorldWithDecider(t, decider)
+	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	grd := world.buildGRD()
 
@@ -24,9 +22,9 @@ func TestJourneyRepositoryAmendsHeldChangeAndSyncReplaysLocalContinuation(t *tes
 	if submit.err != nil {
 		t.Fatalf("submit original change: %v\nstdout:\n%sstderr:\n%s", submit.err, submit.stdout, submit.stderr)
 	}
-	original, ok := decider.original()
-	if !ok || original.Version.Content.Revision != originalRevision {
-		t.Fatalf("decider original = %#v, want revision %q", original, originalRevision)
+	original := world.pendingProposal("ion")
+	if original.Version.Content.Revision != originalRevision {
+		t.Fatalf("pending original = %#v, want revision %q", original, originalRevision)
 	}
 
 	continuedRevision := ion.commitFile("local.txt", "Ion kept working\n", "continue locally")
@@ -123,8 +121,7 @@ func TestJourneyRepositoryAmendsHeldChangeAndSyncReplaysLocalContinuation(t *tes
 }
 
 func TestJourneyConflictingReplayPreservesTheOriginalWorkspace(t *testing.T) {
-	decider := &deferIonDecider{}
-	world := newJourneyWorldWithDecider(t, decider)
+	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	grd := world.buildGRD()
 
@@ -132,10 +129,7 @@ func TestJourneyConflictingReplayPreservesTheOriginalWorkspace(t *testing.T) {
 	if result := ion.run(grd, "submit"); result.err != nil {
 		t.Fatalf("submit original change: %v\n%s", result.err, result.stderr)
 	}
-	original, ok := decider.original()
-	if !ok {
-		t.Fatal("decider did not observe Ion's original change")
-	}
+	original := world.pendingProposal("ion")
 	continuedRevision := ion.commitFile("feature.txt", "Ion's competing fix\n", "continue on the same code")
 
 	repositoryAgent := world.cloneWorkspace("repository-agent")
@@ -429,15 +423,12 @@ func TestJourneySupersededConflictReentersReconciliationAgainstCurrentIntent(t *
 		"origin",
 		"HEAD:refs/candidates/later-intent",
 	)
-	advanced, err := journey.world.server.judgement.Propose(context.Background(), journey.world.server.repo.ID, intentservice.Proposal{
+	advanced := admitAndAcceptJourneyChange(t, journey.world, intentservice.Proposal{
 		IdempotencyKey: "journey-later-intent",
 		BaseIntent:     intent.RevisionID(current.ID),
 		Content:        intent.ContentRef{Engine: "git", Revision: advancedRevision},
 		Producer:       "noam",
 	})
-	if err != nil {
-		t.Fatalf("advance accepted intent: %v", err)
-	}
 	if advanced.Promotion == nil {
 		t.Fatal("later intent was not promoted")
 	}
@@ -534,11 +525,10 @@ func TestJourneyResolvedConflictRestoresNewerWorkWhenReplayStillConflicts(t *tes
 }
 
 func TestJourneyResolvedConflictWaitsForResolutionJudgementBeforePortalSync(t *testing.T) {
-	decider := &deferResolutionPromotionDecider{}
-	journey := stageConflictingReconciliationJourneyWithDecider(t, decider)
+	journey := stageConflictingReconciliationJourney(t)
 	resolvedRevision := journey.repositoryAgent.commitFile("feature.txt", "combined repository and Ion fix\n", "resolve competing feature edits")
 	requireGitSuccess(t, "publish resolved content", "-C", journey.repositoryAgent.path, "push", "origin", "HEAD:refs/candidates/resolution")
-	resolved := resolveJourneyConflict(
+	resolved := resolveJourneyConflictPending(
 		t,
 		journey.world,
 		journey.conflictID,
@@ -577,11 +567,10 @@ func TestJourneyResolvedConflictWaitsForResolutionJudgementBeforePortalSync(t *t
 }
 
 func TestJourneyDeferredResolutionFollowsEffectiveRebaseWhenIntentAdvances(t *testing.T) {
-	decider := &deferResolutionPromotionDecider{}
-	journey := stageConflictingReconciliationJourneyWithDecider(t, decider)
+	journey := stageConflictingReconciliationJourney(t)
 	resolvedRevision := journey.repositoryAgent.commitFile("feature.txt", "combined repository and Ion fix\n", "resolve competing feature edits")
 	requireGitSuccess(t, "publish resolved content", "-C", journey.repositoryAgent.path, "push", "origin", "HEAD:refs/candidates/resolution")
-	resolved := resolveJourneyConflict(
+	resolved := resolveJourneyConflictPending(
 		t,
 		journey.world,
 		journey.conflictID,
@@ -598,15 +587,12 @@ func TestJourneyDeferredResolutionFollowsEffectiveRebaseWhenIntentAdvances(t *te
 	advancedRevision := advancer.commitFile("unrelated.txt", "later intent\n", "advance unrelated intent")
 	requireGitSuccess(t, "publish later intent", "-C", advancer.path, "push", "origin", "HEAD:refs/candidates/later-intent")
 	current := journey.world.currentIntent()
-	advanced, err := journey.world.server.judgement.Propose(context.Background(), journey.world.server.repo.ID, intentservice.Proposal{
+	advanced := admitAndAcceptJourneyChange(t, journey.world, intentservice.Proposal{
 		IdempotencyKey: "journey-later-intent-after-resolution",
 		BaseIntent:     intent.RevisionID(current.ID),
 		Content:        intent.ContentRef{Engine: "git", Revision: advancedRevision},
 		Producer:       "noam",
 	})
-	if err != nil {
-		t.Fatalf("advance accepted intent: %v", err)
-	}
 	if advanced.Promotion == nil {
 		t.Fatal("later intent was not promoted")
 	}
@@ -643,9 +629,6 @@ func TestJourneyDeferredResolutionFollowsEffectiveRebaseWhenIntentAdvances(t *te
 	if err != nil {
 		t.Fatalf("record effective resolution rebase: %v", err)
 	}
-	if rebased.Promotion != nil {
-		t.Fatalf("effective resolution rebase promotion = %#v, want judgement pending before final amendment", rebased.Promotion)
-	}
 	finalRevision := rebaseEngine.commitFile("feature.txt", "combined repository and Ion fix, linted\n", "finish effective resolution")
 	requireGitSuccess(t, "publish amended effective resolution", "-C", rebaseEngine.path, "push", "origin", "HEAD:refs/candidates/final-effective-resolution")
 	final, err := journey.world.server.judgement.Amend(
@@ -653,8 +636,8 @@ func TestJourneyDeferredResolutionFollowsEffectiveRebaseWhenIntentAdvances(t *te
 		journey.world.server.repo.ID,
 		intentservice.AmendmentRequest{
 			IdempotencyKey:  "journey-amend-effective-resolution",
-			ChangeID:        rebased.Rebased.Change.ID,
-			ExpectedVersion: rebased.Rebased.Version.ID,
+			ChangeID:        rebased.Change.ID,
+			ExpectedVersion: rebased.Version.ID,
 			Content:         intent.ContentRef{Engine: "git", Revision: finalRevision},
 			Producer:        "final-fix-engine",
 			Rationale:       "finish the rebased resolution",
@@ -663,8 +646,15 @@ func TestJourneyDeferredResolutionFollowsEffectiveRebaseWhenIntentAdvances(t *te
 	if err != nil {
 		t.Fatalf("amend effective resolution: %v", err)
 	}
-	if final.Promotion == nil || final.Promotion.Promotion.VersionID != final.Amended.Version.ID {
-		t.Fatalf("amended effective resolution promotion = %#v, want ordinary judgement to accept final version", final.Promotion)
+	finalPromotion, err := journey.world.server.judgement.Promote(context.Background(), journey.world.server.repo.ID, intent.PromoteRequest{
+		VersionID:      final.Version.ID,
+		ExpectedIntent: advanced.Promotion.Intent.ID,
+	})
+	if err != nil {
+		t.Fatalf("promote amended effective resolution: %v", err)
+	}
+	if finalPromotion.Promotion.VersionID != final.Version.ID {
+		t.Fatalf("amended effective resolution promotion = %#v, want final version", finalPromotion)
 	}
 
 	status = journey.ion.run(journey.grd, "status")
@@ -720,7 +710,7 @@ type conflictingReconciliationJourney struct {
 	ion              *journeyWorkspace
 	grd              string
 	repositoryAgent  *journeyWorkspace
-	amended          intentservice.AmendmentReceipt
+	amended          journeyAmendmentReceipt
 	conflictID       string
 	conflictVersion  intent.VersionID
 	capturedRevision string
@@ -728,18 +718,7 @@ type conflictingReconciliationJourney struct {
 
 func stageConflictingReconciliationJourney(t *testing.T) conflictingReconciliationJourney {
 	t.Helper()
-	decider := &deferIonDecider{}
-	return stageConflictingReconciliationJourneyWithDecider(t, decider)
-}
-
-type originalRecordingDecider interface {
-	intentservice.PromotionDecider
-	original() (intent.Proposed, bool)
-}
-
-func stageConflictingReconciliationJourneyWithDecider(t *testing.T, decider originalRecordingDecider) conflictingReconciliationJourney {
-	t.Helper()
-	world := newJourneyWorldWithDecider(t, decider)
+	world := newJourneyWorld(t)
 	ion := world.cloneWorkspace("ion")
 	grd := world.buildGRD()
 
@@ -747,10 +726,7 @@ func stageConflictingReconciliationJourneyWithDecider(t *testing.T, decider orig
 	if result := ion.run(grd, "submit"); result.err != nil {
 		t.Fatalf("submit original change: %v\n%s", result.err, result.stderr)
 	}
-	original, ok := decider.original()
-	if !ok {
-		t.Fatal("decider did not observe Ion's original change")
-	}
+	original := world.pendingProposal("ion")
 	capturedRevision := ion.commitFile("feature.txt", "Ion's competing fix\n", "continue on the same code")
 
 	repositoryAgent := world.cloneWorkspace("repository-agent")
@@ -799,9 +775,14 @@ func stageConflictingReconciliationJourneyWithDecider(t *testing.T, decider orig
 	}
 }
 
-func amendJourneyChange(t *testing.T, world *journeyWorld, original intent.Proposed, revision, rationale, idempotencyKey string) intentservice.AmendmentReceipt {
+type journeyAmendmentReceipt struct {
+	Amended   intent.Amended
+	Promotion *intent.Promoted
+}
+
+func amendJourneyChangePending(t *testing.T, world *journeyWorld, original intent.Proposed, revision, rationale, idempotencyKey string) intent.Amended {
 	t.Helper()
-	receipt, err := world.server.judgement.Amend(context.Background(), world.server.repo.ID, intentservice.AmendmentRequest{
+	amended, err := world.server.judgement.Amend(context.Background(), world.server.repo.ID, intentservice.AmendmentRequest{
 		IdempotencyKey:  idempotencyKey,
 		ChangeID:        original.Change.ID,
 		ExpectedVersion: original.Version.ID,
@@ -812,7 +793,45 @@ func amendJourneyChange(t *testing.T, world *journeyWorld, original intent.Propo
 	if err != nil {
 		t.Fatalf("amend journey change: %v", err)
 	}
-	return receipt
+	return amended
+}
+
+func amendJourneyChange(t *testing.T, world *journeyWorld, original intent.Proposed, revision, rationale, idempotencyKey string) journeyAmendmentReceipt {
+	t.Helper()
+	amended := amendJourneyChangePending(t, world, original, revision, rationale, idempotencyKey)
+	promoted, err := world.server.judgement.Promote(context.Background(), world.server.repo.ID, intent.PromoteRequest{
+		VersionID:      amended.Version.ID,
+		ExpectedIntent: intent.RevisionID(world.currentIntent().ID),
+	})
+	if err != nil {
+		t.Fatalf("promote amended journey change: %v", err)
+	}
+	return journeyAmendmentReceipt{Amended: amended, Promotion: &promoted}
+}
+
+type journeyPromotionReceipt struct {
+	Promotion *intent.Promoted
+}
+
+func admitAndAcceptJourneyChange(t *testing.T, world *journeyWorld, proposal intentservice.Proposal) journeyPromotionReceipt {
+	t.Helper()
+	admitted, err := world.server.judgement.Propose(context.Background(), world.server.repo.ID, proposal)
+	if err != nil {
+		t.Fatalf("admit journey change: %v", err)
+	}
+	promoted, err := world.server.judgement.Promote(context.Background(), world.server.repo.ID, intent.PromoteRequest{
+		VersionID:      admitted.Version.ID,
+		ExpectedIntent: intent.RevisionID(world.currentIntent().ID),
+	})
+	if err != nil {
+		t.Fatalf("accept journey change: %v", err)
+	}
+	return journeyPromotionReceipt{Promotion: &promoted}
+}
+
+type journeyResolutionReceipt struct {
+	Resolved  intent.ResolvedReconciliationConflict
+	Promotion *intent.Promoted
 }
 
 func resolveJourneyConflict(
@@ -823,9 +842,31 @@ func resolveJourneyConflict(
 	expectedIntent intent.RevisionID,
 	revision string,
 	rationale string,
-) intentservice.ReconciliationResolutionReceipt {
+) journeyResolutionReceipt {
 	t.Helper()
-	receipt, err := world.server.judgement.ResolveReconciliationConflict(
+	resolved := resolveJourneyConflictPending(t, world, conflictID, expectedVersion, expectedIntent, revision, rationale)
+	promoted, err := world.server.judgement.Promote(context.Background(), world.server.repo.ID, intent.PromoteRequest{
+		VersionID:      resolved.Resolved.Version.ID,
+		ExpectedIntent: intent.RevisionID(world.currentIntent().ID),
+	})
+	if err != nil {
+		t.Fatalf("promote journey conflict resolution: %v", err)
+	}
+	resolved.Promotion = &promoted
+	return resolved
+}
+
+func resolveJourneyConflictPending(
+	t *testing.T,
+	world *journeyWorld,
+	conflictID string,
+	expectedVersion intent.VersionID,
+	expectedIntent intent.RevisionID,
+	revision string,
+	rationale string,
+) journeyResolutionReceipt {
+	t.Helper()
+	resolved, err := world.server.judgement.ResolveReconciliationConflict(
 		context.Background(),
 		world.server.repo.ID,
 		intentservice.ReconciliationResolutionRequest{
@@ -842,70 +883,5 @@ func resolveJourneyConflict(
 	if err != nil {
 		t.Fatalf("resolve journey conflict: %v", err)
 	}
-	return receipt
-}
-
-type deferIonDecider struct {
-	mu       sync.Mutex
-	proposed []intent.Proposed
-}
-
-func (decider *deferIonDecider) DecidePromotion(_ context.Context, subject intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
-	decider.mu.Lock()
-	defer decider.mu.Unlock()
-	proposed := intent.Proposed{Change: subject.Change, Version: subject.Version}
-	decider.proposed = append(decider.proposed, proposed)
-	if proposed.Version.Producer == "ion" {
-		return intentservice.DeferPromotion, nil
-	}
-	return intentservice.PromoteNow, nil
-}
-
-func (decider *deferIonDecider) original() (intent.Proposed, bool) {
-	decider.mu.Lock()
-	defer decider.mu.Unlock()
-	for _, proposed := range decider.proposed {
-		if proposed.Version.Producer == "ion" {
-			return proposed, true
-		}
-	}
-	return intent.Proposed{}, false
-}
-
-type deferResolutionPromotionDecider struct {
-	mu                       sync.Mutex
-	proposed                 []intent.Proposed
-	repositoryAgentDecisions int
-}
-
-func (decider *deferResolutionPromotionDecider) DecidePromotion(_ context.Context, subject intentservice.JudgementSubject) (intentservice.PromotionDecision, error) {
-	decider.mu.Lock()
-	defer decider.mu.Unlock()
-	proposed := intent.Proposed{Change: subject.Change, Version: subject.Version}
-	decider.proposed = append(decider.proposed, proposed)
-	if proposed.Version.Producer == "ion" {
-		return intentservice.DeferPromotion, nil
-	}
-	if proposed.Version.Producer == "rebase-engine" {
-		return intentservice.DeferPromotion, nil
-	}
-	if proposed.Version.Producer != "repository-agent" {
-		return intentservice.PromoteNow, nil
-	}
-	decider.repositoryAgentDecisions++
-	if decider.repositoryAgentDecisions > 1 {
-		return intentservice.DeferPromotion, nil
-	}
-	return intentservice.PromoteNow, nil
-}
-
-func (decider *deferResolutionPromotionDecider) original() (intent.Proposed, bool) {
-	decider.mu.Lock()
-	defer decider.mu.Unlock()
-	for _, proposed := range decider.proposed {
-		if proposed.Version.Producer == "ion" {
-			return proposed, true
-		}
-	}
-	return intent.Proposed{}, false
+	return journeyResolutionReceipt{Resolved: resolved}
 }

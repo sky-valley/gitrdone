@@ -31,6 +31,7 @@ func TestRepositoryPrincipalCanReadIntentAndProposeWithoutPromotionAuthority(t *
 		Version struct {
 			Producer string `json:"producer"`
 		} `json:"version"`
+		State     string `json:"state"`
 		Promotion *struct {
 			ID string `json:"id"`
 		} `json:"promotion"`
@@ -39,8 +40,8 @@ func TestRepositoryPrincipalCanReadIntentAndProposeWithoutPromotionAuthority(t *
 	if receipt.Version.Producer != "ion" {
 		t.Fatalf("proposal producer = %q, want ion", receipt.Version.Producer)
 	}
-	if receipt.Promotion == nil || receipt.Promotion.ID == "" {
-		t.Fatal("approve-all judgement did not promote Ion's proposal")
+	if receipt.State != "pending_judgement" || receipt.Promotion != nil {
+		t.Fatalf("proposal outcome = %#v, want pending judgement without repository-level promotion authority", receipt)
 	}
 
 	readToken := createRepoTokenFixture(t, world.server.handler, world.server.repo.ID, "read", "reader")

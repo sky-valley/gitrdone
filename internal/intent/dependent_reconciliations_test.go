@@ -108,6 +108,13 @@ func TestRepositoryReconcilesDependentAsNewVersionAgainstAcceptedAmendment(t *te
 	} else if len(candidates) != 0 {
 		t.Fatalf("remaining reconciliations = %#v, want C prime to supersede C", candidates)
 	}
+	pending, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list pending judgements: %v", err)
+	}
+	if len(pending.Versions) != 1 || pending.Versions[0].ID != reconciled.Version.ID {
+		t.Fatalf("pending judgements = %#v, want reconciled version %q only", pending.Versions, reconciled.Version.ID)
+	}
 	retried, err := repository.ReconcileDependent(ctx, request)
 	if err != nil {
 		t.Fatalf("retry reconciliation: %v", err)

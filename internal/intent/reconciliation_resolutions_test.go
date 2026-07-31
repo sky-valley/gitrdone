@@ -169,6 +169,13 @@ func TestRepositoryResolvesReconciliationConflictAsNewVersionOfExistingChange(t 
 	if len(admission.admissions) != admissionsBeforeResolution+1 || admission.admissions[len(admission.admissions)-1].versionID != resolved.Version.ID {
 		t.Fatalf("resolution admissions = %#v, want C prime admitted once", admission.admissions)
 	}
+	pending, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list pending judgements: %v", err)
+	}
+	if len(pending.Versions) != 1 || pending.Versions[0].ID != resolved.Version.ID {
+		t.Fatalf("pending judgements = %#v, want resolved version %q only", pending.Versions, resolved.Version.ID)
+	}
 
 	loadedConflict, found, err := repository.ReconciliationConflict(ctx, conflict.ID)
 	if err != nil || !found {

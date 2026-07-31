@@ -97,6 +97,7 @@ func applyReconciliationResolution(state *journalState, record journalRecord) {
 		versionID:  version.ID,
 		conflictID: resolution.ConflictID,
 	}
+	beginPendingJudgement(state, version.ID, resolution.FromVersion)
 }
 
 func (ledger *Ledger) ReconciliationResolution(ctx context.Context, conflictID intent.ConflictID) (intent.ReconciliationResolution, bool, error) {

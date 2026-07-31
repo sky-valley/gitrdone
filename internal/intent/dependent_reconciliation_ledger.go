@@ -82,6 +82,7 @@ func (ledger *transientLedger) RecordDependentReconciliation(_ context.Context, 
 		operation: transientDependentReconciliationOperation,
 		versionID: version.ID,
 	}
+	ledger.beginPendingJudgement(version.ID, reconciliation.FromVersion)
 	return nil
 }
 

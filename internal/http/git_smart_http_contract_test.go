@@ -37,7 +37,7 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 		}
 	})
 
-	t.Run("readwrite token can publish and promoted content can be cloned and fetched", func(t *testing.T) {
+	t.Run("readwrite token can publish pending content without changing clones", func(t *testing.T) {
 		fixture := newGitSmartHTTPFixture(t, "readwrite")
 		readwriteToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "readwrite", "bootstrap-job")
 		readToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "read", "reader-job")
@@ -66,7 +66,7 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 		requireStatus(t, res, body, http.StatusOK)
 
 		requireGitSuccess(t, "fetch with read token", "-C", cloneDir, "pull", "--ff-only", "origin", "main")
-		assertFileContent(t, filepath.Join(cloneDir, "README.md"), "second version\n")
+		assertFileContent(t, filepath.Join(cloneDir, "README.md"), "first version\n")
 	})
 
 	t.Run("write token can push without read scope", func(t *testing.T) {
@@ -121,17 +121,12 @@ type repoTokenFixture struct {
 }
 
 func newGitSmartHTTPFixture(t *testing.T, suffix string) gitSmartHTTPFixture {
-	return newGitSmartHTTPFixtureWithDecider(t, suffix, nil)
-}
-
-func newGitSmartHTTPFixtureWithDecider(t *testing.T, suffix string, decider intentservice.PromotionDecider) gitSmartHTTPFixture {
 	t.Helper()
 
 	handler, judgement, closeHandler := httpapi.NewTestServerWithClose(httpapi.Config{
-		BaseURL:          "https://git.example.com",
-		ControlBearer:    "internal-admin-token",
-		StorageRoot:      t.TempDir(),
-		PromotionDecider: decider,
+		BaseURL:       "https://git.example.com",
+		ControlBearer: "internal-admin-token",
+		StorageRoot:   t.TempDir(),
 	})
 	t.Cleanup(func() {
 		if err := closeHandler(); err != nil {
