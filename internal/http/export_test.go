@@ -6,13 +6,13 @@ import (
 	"github.com/sky-valley/gitrdone/internal/intentservice"
 )
 
-// NewTestServerWithClose exposes the in-process judgement coordinator only to
-// package tests. Repository amendments are judgement behavior, not a public
-// HTTP command.
+// NewTestServerWithClose exposes the in-process intent service only to package
+// tests. Repository amendments are judgement behavior, not a public HTTP
+// command.
 func NewTestServerWithClose(config Config) (http.Handler, *intentservice.Service, func() error) {
 	repos := newMemoryRepoStore(nil)
 	gitStorage := newFilesystemGitStorage(config.StorageRoot)
 	repos.gitStorage = gitStorage
-	resources := buildServer(config, repos, newMemoryIdempotencyStore(nil), gitStorage)
+	resources := buildServer(config, PendingRuntimeConfig{}, repos, newMemoryIdempotencyStore(nil), gitStorage)
 	return resources.handler, resources.judgement, resources.close
 }

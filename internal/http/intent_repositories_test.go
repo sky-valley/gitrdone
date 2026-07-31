@@ -11,6 +11,7 @@ import (
 
 	"github.com/sky-valley/gitrdone/internal/intent"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
+	"github.com/sky-valley/gitrdone/internal/judgement"
 )
 
 func TestIntentRepositoryRegistryBindsControlRepoToGitAndFilesystemLedger(t *testing.T) {
@@ -108,6 +109,119 @@ func TestIntentRepositoryRegistryBootstrapSurvivesRestartAndCannotBeReplaced(t *
 	}
 	if got := strings.TrimSpace(runIntentTestGit(t, "--git-dir", gitDir, "rev-parse", "refs/heads/main")); got != initialCommit {
 		t.Fatalf("main after replacement attempt = %q, want %q", got, initialCommit)
+	}
+}
+
+func TestIntentRepositoryRegistryListsPendingVersionsGloballyAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	storageRoot := t.TempDir()
+	storage := newFilesystemGitStorage(storageRoot)
+	repos := newMemoryRepoStore(nil)
+	repos.gitStorage = storage
+
+	firstRegistry := newIntentRepositoryRegistry(storageRoot, repos, storage)
+	want := make(map[judgement.WorkItem]struct{})
+	for index, name := range []string{"alpha", "beta"} {
+		repo, err := repos.CreateRepo(ctx, createRepoInput{Namespace: "acme", Name: name, DefaultBranch: "main"})
+		if err != nil {
+			t.Fatalf("create repo %s: %v", name, err)
+		}
+		gitDir, err := storage.BareRepoPath(ctx, repo.ID)
+		if err != nil {
+			t.Fatalf("bare repo path for %s: %v", name, err)
+		}
+		initialCommit := seedBareRepo(t, gitDir)
+		repository, err := firstRegistry.Resolve(ctx, formatRepoControlID(repo.ID))
+		if err != nil {
+			t.Fatalf("resolve repo %s: %v", name, err)
+		}
+		proposed, err := repository.Propose(ctx, intent.Proposal{
+			IdempotencyKey: "global-pending-" + name,
+			BaseIntent:     repository.CurrentIntent().ID,
+			Content:        intent.ContentRef{Engine: "git", Revision: initialCommit},
+			Producer:       "actor-" + string(rune('a'+index)),
+		})
+		if err != nil {
+			t.Fatalf("propose in repo %s: %v", name, err)
+		}
+		want[judgement.WorkItem{RepoID: formatRepoControlID(repo.ID), VersionID: proposed.Version.ID}] = struct{}{}
+	}
+	if err := firstRegistry.Close(); err != nil {
+		t.Fatalf("close first registry: %v", err)
+	}
+
+	restarted := newIntentRepositoryRegistry(storageRoot, repos, storage)
+	t.Cleanup(func() { _ = restarted.Close() })
+	pendingSource := newFilesystemPendingSource(restarted)
+	got := make(map[judgement.WorkItem]struct{})
+	cursor := ""
+	for {
+		page, err := pendingSource.ListPending(ctx, cursor, 1)
+		if err != nil {
+			t.Fatalf("list global pending after %q: %v", cursor, err)
+		}
+		for _, item := range page.Items {
+			got[item] = struct{}{}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if len(got) != len(want) {
+		t.Fatalf("global pending = %#v, want %#v", got, want)
+	}
+	for item := range want {
+		if _, found := got[item]; !found {
+			t.Fatalf("global pending missing %#v: %#v", item, got)
+		}
+	}
+}
+
+func TestIntentRepositoryRegistryExcludesArchivedReposFromPendingJudgement(t *testing.T) {
+	ctx := context.Background()
+	storageRoot := t.TempDir()
+	storage := newFilesystemGitStorage(storageRoot)
+	repos := newMemoryRepoStore(nil)
+	repos.gitStorage = storage
+	repo, err := repos.CreateRepo(ctx, createRepoInput{Namespace: "acme", Name: "archived", DefaultBranch: "main"})
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	gitDir, err := storage.BareRepoPath(ctx, repo.ID)
+	if err != nil {
+		t.Fatalf("bare repo path: %v", err)
+	}
+	initialCommit := seedBareRepo(t, gitDir)
+	registry := newIntentRepositoryRegistry(storageRoot, repos, storage)
+	repository, err := registry.Resolve(ctx, formatRepoControlID(repo.ID))
+	if err != nil {
+		t.Fatalf("resolve repo: %v", err)
+	}
+	if _, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "archived-pending",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: initialCommit},
+		Producer:       "ion",
+	}); err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if _, err := repos.ArchiveRepo(ctx, archiveRepoInput{ID: repo.ID}); err != nil {
+		t.Fatalf("archive repo: %v", err)
+	}
+
+	if _, err := registry.Resolve(ctx, formatRepoControlID(repo.ID)); !errors.Is(err, intentservice.ErrRepositoryNotFound) {
+		t.Fatalf("resolve archived repo error = %v, want repository not found", err)
+	}
+	page, err := newFilesystemPendingSource(registry).ListPending(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("pending archived work = %#v, want none", page.Items)
+	}
+	if err := registry.Close(); err != nil {
+		t.Fatalf("close registry: %v", err)
 	}
 }
 

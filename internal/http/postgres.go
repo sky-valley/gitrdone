@@ -527,6 +527,10 @@ func isPostgresUniqueViolation(err error) bool {
 }
 
 func NewPostgresServer(ctx context.Context, config Config, databaseURL string) (http.Handler, func() error, error) {
+	return NewPostgresServerWithPendingRunner(ctx, config, databaseURL, PendingRuntimeConfig{})
+}
+
+func NewPostgresServerWithPendingRunner(ctx context.Context, config Config, databaseURL string, runtime PendingRuntimeConfig) (http.Handler, func() error, error) {
 	db, err := openPostgresPool(ctx, databaseURL)
 	if err != nil {
 		return nil, nil, err
@@ -538,7 +542,7 @@ func NewPostgresServer(ctx context.Context, config Config, databaseURL string) (
 	repos := newPostgresRepoStore(db, nil)
 	gitStorage := newFilesystemGitStorage(config.StorageRoot)
 	repos.gitStorage = gitStorage
-	handler, closeIntentRepositories := newServerWithStores(config, repos, newPostgresIdempotencyStore(db, nil), gitStorage)
+	handler, closeIntentRepositories := newServerWithStores(config, runtime, repos, newPostgresIdempotencyStore(db, nil), gitStorage)
 	return handler, func() error {
 		intentErr := closeIntentRepositories()
 		db.Close()

@@ -104,7 +104,7 @@ The matrix describes intended journeys, not the behaviour of the currently deplo
 
 ## Journey 1: submit and promote immediately
 
-The target journey still permits a no-op judge to promote immediately. The current executable slice stops after durable admission: `grd submit` reports pending judgement and neither intent nor canonical trunk moves. The promotion half resumes when the separate judgement runner exists; it is no longer simulated inside the submission request.
+With `GITRDONE_JUDGEMENT_WORKERS` enabled, the server runs a separate temporary approve-all processor. `grd submit` still reports the truthful admission result as pending, while the runner may promote the Version immediately afterward and advance intent and canonical trunk. The setting defaults to disabled; journey fixtures that need to stage a hold leave it disabled or drive promotion explicitly. Submission itself never runs judgement synchronously.
 
 Baseline:
 
@@ -120,7 +120,7 @@ Workspace remains usable
 
 | ID | Deviation | Expected user contract | Disposition |
 |---|---|---|---|
-| J1.0 | Clean workspace, one commit, directly ahead of A | `grd submit` durably admits B without moving A; a separate no-op judgement may later promote it | Admission proof executable; runner next |
+| J1.0 | Clean workspace, one commit, directly ahead of A | `grd submit` durably admits B without moving A; an enabled approve-all processor may promote it asynchronously | Admission and opt-in runner proof executable |
 | J1.1 | Several commits form one deliverable | Submit them as one change version when the user selects or confirms that boundary | Native target |
 | J1.2 | Workspace contains uncommitted content | Do not guess whether the content belongs in the proposal; preserve it and explain the boundary required | Initial boundary |
 | J1.3 | Workspace is based on older accepted intent | Do not present the proposal as current; either reconsider it against current intent or give a safe reconciliation path | Open |

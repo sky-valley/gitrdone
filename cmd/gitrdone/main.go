@@ -47,6 +47,7 @@ type config struct {
 	controlBearer          string
 	storageRoot            string
 	databaseURL            string
+	judgementWorkers       int
 	maxLFSObjectBytes      int64
 	trustedProxyPrefixes   []netip.Prefix
 	shutdownTimeout        time.Duration
@@ -135,28 +136,26 @@ func closeResources(closeFunc func() error) error {
 }
 
 func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error, error) {
-	handler, closeServer := httpapi.NewServerWithClose(httpapi.Config{
+	httpConfig := httpapi.Config{
 		BaseURL:              cfg.baseURL,
 		ControlBearer:        cfg.controlBearer,
 		StorageRoot:          cfg.storageRoot,
 		MaxLFSObjectBytes:    cfg.maxLFSObjectBytes,
 		AccessLog:            cfg.accessLog,
 		TrustedProxyPrefixes: cfg.trustedProxyPrefixes,
-	})
+	}
+	runtimeConfig := httpapi.PendingRuntimeConfig{Workers: cfg.judgementWorkers}
+	var handler http.Handler
+	var closeServer func() error
 	if cfg.databaseURL != "" {
-		postgresHandler, closePostgres, err := httpapi.NewPostgresServer(ctx, httpapi.Config{
-			BaseURL:              cfg.baseURL,
-			ControlBearer:        cfg.controlBearer,
-			StorageRoot:          cfg.storageRoot,
-			MaxLFSObjectBytes:    cfg.maxLFSObjectBytes,
-			AccessLog:            cfg.accessLog,
-			TrustedProxyPrefixes: cfg.trustedProxyPrefixes,
-		}, cfg.databaseURL)
+		postgresHandler, closePostgres, err := httpapi.NewPostgresServerWithPendingRunner(ctx, httpConfig, cfg.databaseURL, runtimeConfig)
 		if err != nil {
 			return nil, nil, err
 		}
 		handler = postgresHandler
 		closeServer = closePostgres
+	} else {
+		handler, closeServer = httpapi.NewServerWithPendingRunner(httpConfig, runtimeConfig)
 	}
 	if cfg.sentryDSN != "" {
 		sentryHandler := sentryhttp.New(sentryhttp.Options{
@@ -218,6 +217,13 @@ func configFromEnv(getenv func(string) string) (config, error) {
 			return config{}, errors.New("GITRDONE_MAX_LFS_OBJECT_BYTES must be a positive integer")
 		}
 		cfg.maxLFSObjectBytes = maxBytes
+	}
+	if raw := strings.TrimSpace(getenv("GITRDONE_JUDGEMENT_WORKERS")); raw != "" {
+		workers, err := strconv.Atoi(raw)
+		if err != nil || workers < 0 {
+			return config{}, errors.New("GITRDONE_JUDGEMENT_WORKERS must be a non-negative integer")
+		}
+		cfg.judgementWorkers = workers
 	}
 	if cfg.addr == "" {
 		cfg.addr = defaultAddr

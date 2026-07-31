@@ -1,12 +1,17 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/sky-valley/gitrdone/internal/intentapi"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
+	judgementrunner "github.com/sky-valley/gitrdone/internal/judgement"
 )
 
 type Config struct {
@@ -18,25 +23,35 @@ type Config struct {
 	TrustedProxyPrefixes []netip.Prefix
 }
 
+type PendingRuntimeConfig struct {
+	Workers int
+}
+
 func NewServer(config Config) http.Handler {
 	handler, _ := NewServerWithClose(config)
 	return handler
 }
 
 func NewServerWithClose(config Config) (http.Handler, func() error) {
+	return NewServerWithPendingRunner(config, PendingRuntimeConfig{})
+}
+
+// NewServerWithPendingRunner returns both the handler and ownership of the
+// background pending-work runtime. Callers must invoke the returned closer.
+func NewServerWithPendingRunner(config Config, runtime PendingRuntimeConfig) (http.Handler, func() error) {
 	repos := newMemoryRepoStore(nil)
 	gitStorage := newFilesystemGitStorage(config.StorageRoot)
 	repos.gitStorage = gitStorage
-	return newServerWithStores(config, repos, newMemoryIdempotencyStore(nil), gitStorage)
+	return newServerWithStores(config, runtime, repos, newMemoryIdempotencyStore(nil), gitStorage)
 }
 
 func NewServerWithStores(config Config, repos repoStore, idempotency idempotencyDoer) http.Handler {
-	handler, _ := newServerWithStores(config, repos, idempotency, newFilesystemGitStorage(config.StorageRoot))
+	handler, _ := newServerWithStores(config, PendingRuntimeConfig{}, repos, idempotency, newFilesystemGitStorage(config.StorageRoot))
 	return handler
 }
 
-func newServerWithStores(config Config, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) (http.Handler, func() error) {
-	resources := buildServer(config, repos, idempotency, gitStorage)
+func newServerWithStores(config Config, runtime PendingRuntimeConfig, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) (http.Handler, func() error) {
+	resources := buildServer(config, runtime, repos, idempotency, gitStorage)
 	return resources.handler, resources.close
 }
 
@@ -46,7 +61,7 @@ type serverResources struct {
 	close     func() error
 }
 
-func buildServer(config Config, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) serverResources {
+func buildServer(config Config, runtime PendingRuntimeConfig, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) serverResources {
 	control := func(handler http.Handler) http.Handler {
 		return controlAuth(config.ControlBearer, handler)
 	}
@@ -54,8 +69,36 @@ func buildServer(config Config, repos repoStore, idempotency idempotencyDoer, gi
 		idempotency = newMemoryIdempotencyStore(nil)
 	}
 	intentRepositories := newIntentRepositoryRegistry(config.StorageRoot, repos, gitStorage)
-	judgement := intentservice.New(intentRepositories)
-	intentHandlers := intentapi.NewHandlers(judgement)
+	intentService := intentservice.New(intentRepositories)
+	intentHandlers := intentapi.NewHandlers(intentService)
+	closeRunner := func() error { return nil }
+	if runtime.Workers > 0 {
+		runner := judgementrunner.NewPendingRunner(
+			newFilesystemPendingSource(intentRepositories),
+			judgementrunner.NewMemoryLeases(nil),
+			judgementrunner.NewApproveAllProcessor(intentService),
+			judgementrunner.RunnerOptions{
+				Workers:      runtime.Workers,
+				BatchSize:    runtime.Workers,
+				PollInterval: 100 * time.Millisecond,
+				LeaseTTL:     5 * time.Minute,
+				Report: func(err error) {
+					log.Printf("gitrdone pending runner: %v", err)
+				},
+			},
+		)
+		runnerCtx, stopRunner := context.WithCancel(context.Background())
+		runnerDone := make(chan struct{})
+		go func() {
+			defer close(runnerDone)
+			runner.Run(runnerCtx)
+		}()
+		closeRunner = func() error {
+			stopRunner()
+			<-runnerDone
+			return nil
+		}
+	}
 
 	mux := NewMux(Handlers{
 		AgentDocs:                    agentDocsHandler(config.BaseURL),
@@ -81,8 +124,10 @@ func buildServer(config Config, repos repoStore, idempotency idempotencyDoer, gi
 	})
 	return serverResources{
 		handler:   accessLog(config.AccessLog, config.TrustedProxyPrefixes, mux),
-		judgement: judgement,
-		close:     intentRepositories.Close,
+		judgement: intentService,
+		close: func() error {
+			return errors.Join(closeRunner(), intentRepositories.Close())
+		},
 	}
 }
 

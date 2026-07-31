@@ -40,6 +40,9 @@ func TestConfigFromEnvUsesLocalDefaults(t *testing.T) {
 	if cfg.databaseURL != "" {
 		t.Fatalf("databaseURL = %q, want empty", cfg.databaseURL)
 	}
+	if cfg.judgementWorkers != 0 {
+		t.Fatalf("judgementWorkers = %d, want disabled by default", cfg.judgementWorkers)
+	}
 	if cfg.sentryDSN != "" {
 		t.Fatalf("sentryDSN = %q, want empty", cfg.sentryDSN)
 	}
@@ -72,6 +75,7 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 		"GITRDONE_TRUSTED_PROXIES":      "10.0.0.0/8,192.0.2.10",
 		"GITRDONE_SHUTDOWN_TIMEOUT":     "30s",
 		"GITRDONE_MAX_LFS_OBJECT_BYTES": "12345",
+		"GITRDONE_JUDGEMENT_WORKERS":    "2",
 		"SENTRY_DSN":                    "https://public@example.ingest.sentry.io/123",
 		"SENTRY_ENVIRONMENT":            "main",
 		"SENTRY_RELEASE":                "abc1234",
@@ -105,6 +109,9 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	}
 	if cfg.maxLFSObjectBytes != 12345 {
 		t.Fatalf("maxLFSObjectBytes = %d, want 12345", cfg.maxLFSObjectBytes)
+	}
+	if cfg.judgementWorkers != 2 {
+		t.Fatalf("judgementWorkers = %d, want 2", cfg.judgementWorkers)
 	}
 	if cfg.sentryDSN != "https://public@example.ingest.sentry.io/123" {
 		t.Fatalf("sentryDSN = %q, want configured DSN", cfg.sentryDSN)
@@ -196,6 +203,27 @@ func TestConfigFromEnvRejectsInvalidMaxLFSObjectBytes(t *testing.T) {
 			})
 			if err == nil {
 				t.Fatal("err is nil, want invalid max LFS object bytes error")
+			}
+		})
+	}
+}
+
+func TestConfigFromEnvRejectsInvalidJudgementWorkers(t *testing.T) {
+	tests := []string{"not-a-number", "-1"}
+	for _, value := range tests {
+		t.Run(value, func(t *testing.T) {
+			_, err := configFromEnv(func(key string) string {
+				switch key {
+				case "GITRDONE_CONTROL_BEARER":
+					return "internal-admin-token"
+				case "GITRDONE_JUDGEMENT_WORKERS":
+					return value
+				default:
+					return ""
+				}
+			})
+			if err == nil {
+				t.Fatal("err is nil, want invalid judgement worker count error")
 			}
 		})
 	}

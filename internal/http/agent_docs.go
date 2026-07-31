@@ -92,7 +92,7 @@ Propose an immutable repository state with POST /v1/repos/{repoID}/proposals usi
 
 Dependencies are optional exact admitted version IDs. A dependent version may be admitted and inspected while its parents await promotion, but it cannot promote until those dependencies have promoted.
 
-A successful proposal response means the change version was durably admitted. The response always identifies the change and version and reports state as pending_judgement. Proposal admission does not run judgement or promotion inside the request. Absence of a promotion means only that the Version remains pending; it does not assert a specific hold decision.
+A successful proposal response means the change version was durably admitted. The response always identifies the change and version and reports state as pending_judgement. Proposal admission does not run judgement or promotion inside the request. When asynchronous processing is enabled, the temporary approve-all processor may promote it immediately afterward. Absence of a promotion in the response means only that admission and judgement are separate; it does not assert a specific hold decision.
 
 Inspect the durable identity with GET /v1/repos/{repoID}/changes/{changeID}. The summary reports latestAmendment and latestPromotion only when those outcomes exist. Read immutable versions with GET /v1/repos/{repoID}/changes/{changeID}/versions. The versions endpoint accepts limit from 1 to 100 and an opaque cursor returned by the previous page. Repository amendment is an internal judgement operation, not a public HTTP command.
 
@@ -217,7 +217,7 @@ For retriable automation, include Idempotency-Key on token creation and derive i
 
 List and revoke repo tokens with the control bearer token; token values are returned only at creation.
 
-Idempotency-Key is required on POST /v1/repos/{repoID}/proposals and POST /v1/repos/{repoID}/reconciliation-conflicts. A successful proposal response means the change version was durably admitted as pending judgement; the request does not run judgement or promotion.
+Idempotency-Key is required on POST /v1/repos/{repoID}/proposals and POST /v1/repos/{repoID}/reconciliation-conflicts. A successful proposal response means the change version was durably admitted as pending judgement; the request does not run judgement or promotion, though an enabled asynchronous processor may act immediately afterward.
 
 ## Agent Docs
 

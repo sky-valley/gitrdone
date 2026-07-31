@@ -43,6 +43,16 @@ func (registry *intentRepositoryRegistry) Resolve(ctx context.Context, controlRe
 	if !ok {
 		return nil, intentservice.ErrRepositoryNotFound
 	}
+	repo, err := registry.repos.GetRepo(ctx, getRepoInput{ID: repoID})
+	if errors.Is(err, errRepoNotFound) {
+		return nil, intentservice.ErrRepositoryNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load repo metadata: %w", err)
+	}
+	if !repo.ArchivedAt.IsZero() {
+		return nil, intentservice.ErrRepositoryNotFound
+	}
 
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -53,13 +63,6 @@ func (registry *intentRepositoryRegistry) Resolve(ctx context.Context, controlRe
 		return entry.repository, nil
 	}
 
-	repo, err := registry.repos.GetRepo(ctx, getRepoInput{ID: repoID})
-	if errors.Is(err, errRepoNotFound) {
-		return nil, intentservice.ErrRepositoryNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load repo metadata: %w", err)
-	}
 	return registry.openLocked(ctx, repo)
 }
 

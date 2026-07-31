@@ -820,7 +820,7 @@ The native target is closer to a continuously snapshotted working change: editin
 
 The J3 amendment proof introduced names and an HTTP command that made temporary implementation machinery look like settled product design. `POST /changes/{changeID}/versions` invited callers to drive repository amendment directly. A generic `NextAction` triage interface implied an open-ended workflow engine even though the slice only decides immediate promotion. Change inspection fields named `amendment` and `promotion` implied complete lifecycle state while returning only outcomes for the latest version. The client also interpreted every missing promotion as an explicit hold.
 
-Those names would make the temporary Git adapter and approve-all coordinator harder to replace because callers and future code would begin treating them as native concepts.
+Those names would make the temporary Git adapter and approve-all processor harder to replace because callers and future code would begin treating them as native concepts.
 
 ### Resolution
 
@@ -1012,8 +1012,30 @@ The filesystem ledger stores no second queue record or mutable workflow enum. It
 
 Every Version-producing service operation now returns after its durable repository write: proposal, amendment, dependent reconciliation, conflict resolution, and held-version rebase. None invokes judgement or promotion as an incidental side effect. `Service.Promote` is a separate explicit internal operation. The proposal HTTP response reports `pending_judgement`; accepted intent and canonical trunk remain unchanged.
 
-This slice does not claim work, persist a judgement outcome, or execute an action plan. Those belong to the separate judgement runner. Executable journey fixtures call the explicit promotion operation when they need to stage an accepted outcome; that is test orchestration, not synchronous judgement hidden inside Version creation.
+This durable-pending slice does not itself claim work, persist a judgement outcome, or execute an action plan. Resolution 017 adds the separate asynchronous runner. Executable journey fixtures may still call explicit promotion directly when they need deterministic control over an accepted outcome; that is test orchestration, not synchronous judgement hidden inside Version creation.
 
 ### Agreed ownership rule
 
-> The repository records that a Version requires judgement; a separate runner decides and executes what happens to it.
+> The repository records that a Version requires judgement; separate judgement machinery decides, and a runner executes the resulting durable-safe step.
+
+## Resolution 017: asynchronous judgement is a derived worker loop, not a second queue
+
+**Status:** Agreed and implemented for the temporary approve-all runner slice
+
+### Reservation
+
+Running judgement from a storage callback would bind repository semantics to the filesystem ledger and lose work when an in-process notification is missed. Persisting generic jobs or claim state on immutable Versions would instead create a second lifecycle authority beside the pending projection. Unbounded goroutines would also let one repository consume the server.
+
+### Resolution
+
+When explicitly enabled, the application owns a cancellable `PendingRunner` with a bounded worker pool. It reads a single global stream of `{repoID, versionID}` pending work through a consumer-shaped interface; repository enumeration and filesystem layout remain private to the current adapter. `GITRDONE_JUDGEMENT_WORKERS` selects the bound and defaults to zero, so deployment does not silently activate autonomous promotion. Proposal admission still returns after its durable write and never waits for judgement.
+
+A free worker acquires an expiring lease keyed by repository and Version immediately before processing; work waiting for a worker is not claimed. Leases carry a monotonically increasing generation so a stale owner cannot renew or release a replacement lease. Active work renews its lease, and completion or ordinary failure releases it. The current implementation keeps leases in memory: process failure therefore releases all claims implicitly, while durable pending state survives and is rediscovered on restart. A future Postgres lease implementation can replace that synchronization without changing the runner or processor.
+
+The lease is not repository lifecycle state and does not fence external effects. Deleting every lease cannot lose work, change accepted intent, or make a Version cease to be pending. Processing is at least once; effect implementations must provide their own durable idempotency or fencing. The current promotion effect is safe because the intent domain already uses CAS and idempotent recovery. Long-lived waits for tests or humans will require durable judgement facts describing that wait; they must not be smuggled into lease state.
+
+The temporary `ApproveAllProcessor` reloads current intent and requests explicit promotion. Its name is deliberate: it is disposable attempt execution, not the future judgement contract, decision model, rationale, or action-plan coordinator. Dependency waits, concurrent promotion, and stale intent remain pending for later attempts. Archived repositories are excluded from discovery and repository lifecycle is rechecked through service resolution before promotion. Promotion preparation removes successful work from the pending projection and hands the remaining crash window to the existing promotion reconciler.
+
+### Agreed ownership rule
+
+> Pending is repository truth; a lease coordinates one disposable attempt to act on that truth.
