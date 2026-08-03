@@ -56,6 +56,19 @@ func TestRepositoryPrincipalCanReadIntentAndProposeWithoutPromotionAuthority(t *
 		"Idempotency-Key": "read-only-proposal",
 	}, proposalBody)
 	requireStatus(t, res, body, http.StatusForbidden)
+
+	reviewToken := createRepoTokenFixture(t, world.server.handler, world.server.repo.ID, "review", "Noam+GitRDone@Company.Example")
+	res, body = request(t, world.server.handler, http.MethodGet, "/v1/repos/"+world.server.repo.ID+"/intent", repoBasicAuthorization(reviewToken.Token), "", "")
+	requireStatus(t, res, body, http.StatusOK)
+	res, body = request(t, world.server.handler, http.MethodGet, "/v1/repos/"+world.server.repo.ID+"/changes/"+receipt.Change.ID, repoBasicAuthorization(reviewToken.Token), "", "")
+	requireStatus(t, res, body, http.StatusOK)
+	res, body = requestWithHeaders(t, world.server.handler, http.MethodPost, "/v1/repos/"+world.server.repo.ID+"/proposals", map[string]string{
+		"Authorization":   repoBasicAuthorization(reviewToken.Token),
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "reviewer-cannot-propose",
+	}, proposalBody)
+	requireStatus(t, res, body, http.StatusForbidden)
+
 	res, body = requestWithHeaders(t, world.server.handler, http.MethodPost, "/v1/repos/"+world.server.repo.ID+"/changes/"+receipt.Change.ID+"/versions", map[string]string{
 		"Authorization":   repoBasicAuthorization(ion.token),
 		"Content-Type":    "application/json",

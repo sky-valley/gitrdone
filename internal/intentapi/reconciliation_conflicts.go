@@ -8,6 +8,7 @@ import (
 
 	"github.com/sky-valley/gitrdone/internal/intent"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
+	"github.com/sky-valley/gitrdone/internal/requestauth"
 )
 
 const defaultReconciliationConflictPageSize = 50
@@ -83,7 +84,7 @@ func recordReconciliationConflictHandler(service *intentservice.Service) http.Ha
 			ToVersion:         intent.VersionID(body.ToVersion),
 			DescendantVersion: intent.VersionID(body.DescendantVersion),
 			ExpectedIntent:    intent.RevisionID(body.ExpectedIntent),
-			ReportedBy:        authenticatedProducer(r),
+			ReportedBy:        requestauth.Subject(r),
 			AffectedPaths:     body.AffectedPaths,
 		})
 		if !writeReconciliationConflictError(w, err) {

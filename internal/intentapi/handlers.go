@@ -1,7 +1,6 @@
 package intentapi
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/sky-valley/gitrdone/internal/intent"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
+	"github.com/sky-valley/gitrdone/internal/requestauth"
 )
 
 const maxRequestBodyBytes = 64 * 1024
@@ -38,17 +38,6 @@ func NewHandlers(service *intentservice.Service) Handlers {
 		GetChange:                    getChangeHandler(service),
 		ListVersions:                 listVersionsHandler(service),
 	}
-}
-
-type authenticatedProducerContextKey struct{}
-
-func WithAuthenticatedProducer(request *http.Request, producer string) *http.Request {
-	return request.WithContext(context.WithValue(request.Context(), authenticatedProducerContextKey{}, strings.TrimSpace(producer)))
-}
-
-func authenticatedProducer(request *http.Request) string {
-	producer, _ := request.Context().Value(authenticatedProducerContextKey{}).(string)
-	return producer
 }
 
 func bootstrapHandler(service *intentservice.Service) http.Handler {
@@ -211,7 +200,7 @@ func admitProposalHandler(service *intentservice.Service) http.Handler {
 		proposed, err := service.Propose(r.Context(), repoID, intentservice.Proposal{
 			IdempotencyKey: idempotencyKey,
 			BaseIntent:     intent.RevisionID(body.BaseIntent),
-			Producer:       authenticatedProducer(r),
+			Producer:       requestauth.Subject(r),
 			Dependencies:   dependencies,
 			Content: intent.ContentRef{
 				Engine:   body.ContentRef.Engine,

@@ -11,6 +11,7 @@ import (
 	"github.com/sky-valley/gitrdone/internal/intent"
 	"github.com/sky-valley/gitrdone/internal/intentapi"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
+	"github.com/sky-valley/gitrdone/internal/requestauth"
 )
 
 func TestNativeIntentAPIAdmitsAProposalAsPendingJudgement(t *testing.T) {
@@ -28,7 +29,7 @@ func TestNativeIntentAPIAdmitsAProposalAsPendingJudgement(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "request-1")
 	recorder := httptest.NewRecorder()
 
-	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+	handlers.AdmitProposal.ServeHTTP(recorder, requestauth.WithSubject(request, "control-api"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
@@ -89,7 +90,7 @@ func TestNativeIntentAPIAdmitsAProposalAsPendingJudgement(t *testing.T) {
 	retry.Header.Set("Content-Type", "application/json")
 	retry.Header.Set("Idempotency-Key", "request-1")
 	retryRecorder := httptest.NewRecorder()
-	handlers.AdmitProposal.ServeHTTP(retryRecorder, intentapi.WithAuthenticatedProducer(retry, "control-api"))
+	handlers.AdmitProposal.ServeHTTP(retryRecorder, requestauth.WithSubject(retry, "control-api"))
 	if retryRecorder.Code != http.StatusOK {
 		t.Fatalf("retry status = %d, want 200: %s", retryRecorder.Code, retryRecorder.Body.String())
 	}
@@ -133,7 +134,7 @@ func TestNativeIntentAPIKeepsAdmissionSuccessSeparateFromPromotion(t *testing.T)
 	request.Header.Set("Idempotency-Key", "stale-proposal")
 	recorder := httptest.NewRecorder()
 
-	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+	handlers.AdmitProposal.ServeHTTP(recorder, requestauth.WithSubject(request, "control-api"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
@@ -174,7 +175,7 @@ func TestNativeIntentAPIAdmitsAnExplicitVersionDependency(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "dependent")
 	recorder := httptest.NewRecorder()
 
-	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "ion"))
+	handlers.AdmitProposal.ServeHTTP(recorder, requestauth.WithSubject(request, "ion"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
@@ -304,7 +305,7 @@ func TestNativeIntentAPIRejectsSpoofedProducerAndUnsafeRetries(t *testing.T) {
 				request.Header.Set("Idempotency-Key", test.header)
 			}
 			recorder := httptest.NewRecorder()
-			handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+			handlers.AdmitProposal.ServeHTTP(recorder, requestauth.WithSubject(request, "control-api"))
 			if recorder.Code != test.status {
 				t.Fatalf("status = %d, want %d: %s", recorder.Code, test.status, recorder.Body.String())
 			}
@@ -317,7 +318,7 @@ func TestNativeIntentAPIRejectsSpoofedProducerAndUnsafeRetries(t *testing.T) {
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", "same-key")
 		recorder := httptest.NewRecorder()
-		handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+		handlers.AdmitProposal.ServeHTTP(recorder, requestauth.WithSubject(request, "control-api"))
 		return recorder
 	}
 	if first := propose("bbbbbbbb"); first.Code != http.StatusOK {
@@ -344,7 +345,7 @@ func TestNativeIntentAPIReturnsUnprocessableForContentTheEngineCannotAdmit(t *te
 	request.Header.Set("Idempotency-Key", "wrong-engine")
 	recorder := httptest.NewRecorder()
 
-	handlers.AdmitProposal.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "control-api"))
+	handlers.AdmitProposal.ServeHTTP(recorder, requestauth.WithSubject(request, "control-api"))
 
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422: %s", recorder.Code, recorder.Body.String())

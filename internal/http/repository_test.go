@@ -277,6 +277,77 @@ func TestMemoryRepoStoreListRevokeAndAuditRepoTokens(t *testing.T) {
 	}
 }
 
+func TestMemoryRepoStoreReviewScopeCanInspectAndReviewButCannotPropose(t *testing.T) {
+	store := newMemoryRepoStore(nil)
+	store.gitStorage = fixedRepoGitStorage{path: "/tmp/repo.git"}
+	repo, err := store.CreateRepo(context.Background(), createRepoInput{
+		Namespace:     "fixture",
+		Name:          "review-authority",
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
+		RepoID:     repo.ID,
+		Scope:      "review",
+		Subject:    "Noam+GitRDone@Company.Example",
+		TTLSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gitGrant, err := store.AuthorizeGitAccess(context.Background(), authorizeGitAccessInput{
+		RepoID: repo.ID, Token: token.Token, Operation: gitOperationRead,
+	})
+	if err != nil {
+		t.Fatalf("review token read: %v", err)
+	}
+	if gitGrant.Subject != "noam+gitrdone@company.example" {
+		t.Fatalf("git subject = %q, want reviewer email", gitGrant.Subject)
+	}
+	if _, err := store.AuthorizeGitAccess(context.Background(), authorizeGitAccessInput{
+		RepoID: repo.ID, Token: token.Token, Operation: gitOperationWrite,
+	}); !errors.Is(err, errRepoTokenForbidden) {
+		t.Fatalf("review token write error = %v, want errRepoTokenForbidden", err)
+	}
+	for _, capability := range []repoCapability{repoCapabilityInspect, repoCapabilityReview} {
+		grant, err := store.AuthorizeRepoAccess(context.Background(), authorizeRepoAccessInput{
+			RepoID: repo.ID, Token: token.Token, Capability: capability,
+		})
+		if err != nil {
+			t.Fatalf("review token capability %q: %v", capability, err)
+		}
+		if grant.Subject != "noam+gitrdone@company.example" {
+			t.Fatalf("capability %q subject = %q, want reviewer email", capability, grant.Subject)
+		}
+	}
+	if _, err := store.AuthorizeRepoAccess(context.Background(), authorizeRepoAccessInput{
+		RepoID: repo.ID, Token: token.Token, Capability: repoCapabilityPropose,
+	}); !errors.Is(err, errRepoTokenForbidden) {
+		t.Fatalf("review token propose error = %v, want errRepoTokenForbidden", err)
+	}
+	if _, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
+		RepoID: repo.ID, Scope: "review", Subject: "control-api", TTLSeconds: 3600,
+	}); !errors.Is(err, errRepoTokenReviewSubjectInvalid) {
+		t.Fatalf("non-email review subject error = %v, want errRepoTokenReviewSubjectInvalid", err)
+	}
+	for _, scope := range []string{"read", "write", "readwrite"} {
+		ordinary, err := store.CreateRepoToken(context.Background(), createRepoTokenInput{
+			RepoID: repo.ID, Scope: scope, Subject: "noam@company.example", TTLSeconds: 3600,
+		})
+		if err != nil {
+			t.Fatalf("create %s token: %v", scope, err)
+		}
+		if _, err := store.AuthorizeRepoAccess(context.Background(), authorizeRepoAccessInput{
+			RepoID: repo.ID, Token: ordinary.Token, Capability: repoCapabilityReview,
+		}); !errors.Is(err, errRepoTokenForbidden) {
+			t.Fatalf("%s token review error = %v, want errRepoTokenForbidden", scope, err)
+		}
+	}
+}
+
 func TestMemoryRepoStoreTokenLifecycleRequiresMatchingRepo(t *testing.T) {
 	store := newMemoryRepoStore(time.Now)
 	firstRepo, err := store.CreateRepo(context.Background(), createRepoInput{

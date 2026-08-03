@@ -544,6 +544,32 @@ func TestTokenProvisioningContract(t *testing.T) {
 		assertFutureExpiryWithin(t, got.ExpiresAt, 7*24*time.Hour)
 	})
 
+	t.Run("review token uses a canonical email subject", func(t *testing.T) {
+		created := createRepoFixture(t, server, "reviewer-token")
+		res, body := request(
+			t,
+			server,
+			http.MethodPost,
+			"/v1/repos/"+created.ID+"/tokens",
+			controlAuthorization,
+			"application/json",
+			`{"scope":"review","ttlSeconds":3600,"subject":"Noam+GitRDone@Company.Example"}`,
+		)
+
+		requireStatus(t, res, body, http.StatusCreated)
+		var got struct {
+			Scope   string `json:"scope"`
+			Subject string `json:"subject"`
+		}
+		decodeJSON(t, res, body, &got)
+		if got.Scope != "review" {
+			t.Fatalf("scope = %q, want review", got.Scope)
+		}
+		if got.Subject != "noam+gitrdone@company.example" {
+			t.Fatalf("subject = %q, want canonical email", got.Subject)
+		}
+	})
+
 	t.Run("repo token validates request shape", func(t *testing.T) {
 		created := createRepoFixture(t, server, "invalid-token")
 		tests := []struct {
@@ -554,7 +580,12 @@ func TestTokenProvisioningContract(t *testing.T) {
 			{
 				name: "invalid scope",
 				body: `{"scope":"admin","ttlSeconds":3600,"subject":"bootstrap-job-abc"}`,
-				want: "scope must be read, write, or readwrite",
+				want: "scope must be read, write, readwrite, or review",
+			},
+			{
+				name: "review subject is not an email",
+				body: `{"scope":"review","ttlSeconds":3600,"subject":"reviewer-job"}`,
+				want: "review subject must be a valid email address",
 			},
 			{
 				name: "missing subject",

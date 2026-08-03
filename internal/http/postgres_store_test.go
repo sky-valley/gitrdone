@@ -153,6 +153,25 @@ func TestPostgresRepoStoreContract(t *testing.T) {
 	if !errors.Is(err, errRepoTokenInvalid) {
 		t.Fatalf("AuthorizeGitAccess error = %v, want errRepoTokenInvalid", err)
 	}
+	reviewer, err := store.CreateRepoToken(ctx, createRepoTokenInput{
+		RepoID: repo.ID, Scope: "review", Subject: "Noam+GitRDone@Company.Example", TTLSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatalf("create review token: %v", err)
+	}
+	if reviewer.Subject != "noam+gitrdone@company.example" {
+		t.Fatalf("review subject = %q, want canonical email", reviewer.Subject)
+	}
+	if _, err := store.AuthorizeRepoAccess(ctx, authorizeRepoAccessInput{
+		RepoID: repo.ID, Token: reviewer.Token, Capability: repoCapabilityReview,
+	}); err != nil {
+		t.Fatalf("authorize review token: %v", err)
+	}
+	if _, err := store.CreateRepoToken(ctx, createRepoTokenInput{
+		RepoID: repo.ID, Scope: "review", Subject: "control-api", TTLSeconds: 3600,
+	}); !errors.Is(err, errRepoTokenReviewSubjectInvalid) {
+		t.Fatalf("Postgres non-email review subject error = %v, want errRepoTokenReviewSubjectInvalid", err)
+	}
 
 	archived, err := store.ArchiveRepo(ctx, archiveRepoInput{ID: repo.ID})
 	if err != nil {

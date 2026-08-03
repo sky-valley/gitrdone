@@ -94,6 +94,18 @@ func TestGitSmartHTTPRealGitCommands(t *testing.T) {
 		requireGitFailure(t, "clone with write token", "clone", fixture.tokenizedGitURL(writeToken.Token), filepath.Join(t.TempDir(), "clone"))
 	})
 
+	t.Run("review token can clone but cannot push", func(t *testing.T) {
+		fixture := newGitSmartHTTPFixture(t, "review")
+		reviewToken := createRepoTokenFixture(t, fixture.handler, fixture.repo.ID, "review", "noam@company.example")
+		remote := fixture.tokenizedGitURL(reviewToken.Token)
+
+		cloneDir := filepath.Join(t.TempDir(), "clone")
+		requireGitSuccess(t, "clone with review token", "clone", remote, cloneDir)
+		worktree := newGitWorktree(t, "review-denied.txt", "review cannot publish\n")
+		requireGitSuccess(t, "add review remote", "-C", worktree, "remote", "add", "origin", remote)
+		requireGitFailure(t, "push with review token", "-C", worktree, "push", "origin", "HEAD:refs/candidates/reviewer/change")
+	})
+
 	t.Run("missing token cannot clone", func(t *testing.T) {
 		fixture := newGitSmartHTTPFixture(t, "missing-token")
 

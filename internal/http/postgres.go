@@ -165,6 +165,11 @@ func (store *postgresRepoStore) ArchiveRepo(ctx context.Context, input archiveRe
 }
 
 func (store *postgresRepoStore) CreateRepoToken(ctx context.Context, input createRepoTokenInput) (repoTokenRecord, error) {
+	normalized, err := normalizeCreateRepoTokenInput(input)
+	if err != nil {
+		return repoTokenRecord{}, err
+	}
+	input = normalized
 	queryer := postgresQueryer(store.db)
 	if tx, ok := postgresTxFromContext(ctx); ok {
 		queryer = tx

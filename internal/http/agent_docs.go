@@ -68,12 +68,13 @@ Repo tokens are capability grants, not user identity sessions. The token subject
 - read: clone, fetch, pull, Git LFS downloads, read diff endpoints, read current intent, inspect changes and versions
 - write: push, Git LFS uploads, propose content
 - readwrite: all read and write capabilities; required by grd submit because submission reads current intent and publishes content
+- review: clone, fetch, read diffs and repository state, and authenticate a future assigned review response; cannot push or propose. Its subject must be an email address and is normalized when issued.
 
 Normal Git clients should use Basic auth with username x-access-token and a repo token as the password. Do not persist repo tokens in remote URLs. Bearer auth is also accepted by Git and native intent routes for service callers.
 
 ## Native repository API
 
-Read the repository's currently accepted content with GET /v1/repos/{repoID}/intent using a read or readwrite repo token, or the control bearer.
+Read the repository's currently accepted content with GET /v1/repos/{repoID}/intent using a read, readwrite, or review repo token, or the control bearer.
 
 For a new repository only, publish the initial Git commit to a noncanonical ref, then establish root intent with PUT /v1/repos/{repoID}/intent using the control bearer token. Retrying the same content is idempotent. Different content is rejected after initialization.
 

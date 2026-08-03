@@ -1039,3 +1039,25 @@ The temporary `ApproveAllProcessor` reloads current intent and requests explicit
 ### Agreed ownership rule
 
 > Pending is repository truth; a lease coordinates one disposable attempt to act on that truth.
+
+## Resolution 018: reviewer authority begins with an authenticated subject, not a user system
+
+**Status:** Agreed and implemented as authority groundwork
+
+### Reservation
+
+Human-review obligations are meaningless if an approval can name its own approver in request JSON. Building accounts, teams, invitations, passwords, or SSO before the first judgement proof would solve a much larger problem than the repository currently has. Reusing ordinary write authority for review would also let a development credential acquire semantic approval power accidentally.
+
+### Resolution
+
+Repository tokens already carry a server-issued subject. The first reviewer identity is therefore a dedicated `review` token whose subject is a normalized email address. Review scope may read Git content, diffs, and native repository state, but it cannot push or propose. It owns a separate repository review capability that future review-response transport will require.
+
+Authenticated request identity is carried as a neutral subject rather than as a proposal-specific producer. Proposal authorship and reconciliation reporting continue to derive from that subject. A future review response will do the same and will compare the authenticated subject with the exact reviewer assigned by the durable obligation; the request body will not select or assert its approver.
+
+The control bearer remains the distinct subject `control-api`. Administrative authority may later gain an explicit override operation, but it must not silently impersonate a named reviewer.
+
+This slice does not introduce a user record, company directory, login flow, review obligation, response endpoint, or judge. A later identity provider may authenticate the same subjects without changing durable review ownership.
+
+### Agreed ownership rule
+
+> Authentication establishes who acted; judgement assigns who must act; request data may describe the response but never the responder.

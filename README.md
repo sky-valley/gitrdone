@@ -130,6 +130,7 @@ Token scopes:
 | `read` | clone, fetch, pull, Git LFS downloads, read diff endpoints, read current intent, inspect changes and versions |
 | `write` | push, Git LFS uploads, propose content |
 | `readwrite` | all read and write capabilities; required by `grd submit` |
+| `review` | clone, fetch, read diffs and repository state, and authenticate a future assigned review response; cannot push or propose |
 
 Create-token responses include the raw token. List and revoke endpoints return metadata only.
 
@@ -162,7 +163,7 @@ PUT /v1/repos/{repoID}/intent
 
 ## Native repository API
 
-`GET /v1/repos/{repoID}/intent`, change and conflict inspection, and the corresponding `/versions` collection accept a `read` or `readwrite` repo token. `POST /v1/repos/{repoID}/proposals` and `POST /v1/repos/{repoID}/reconciliation-conflicts` accept a `write` or `readwrite` repo token plus `Idempotency-Key`; the admitted producer is derived from the token subject rather than request JSON. A proposal may include `dependencies`, an array of exact admitted version IDs that must promote before the dependent version can promote. The control bearer remains accepted on these routes for trusted service callers. Root-intent bootstrap remains control-only.
+`GET /v1/repos/{repoID}/intent`, change and conflict inspection, and the corresponding `/versions` collection accept a `read`, `readwrite`, or `review` repo token. `POST /v1/repos/{repoID}/proposals` and `POST /v1/repos/{repoID}/reconciliation-conflicts` accept a `write` or `readwrite` repo token plus `Idempotency-Key`; the admitted producer is derived from the authenticated token subject rather than request JSON. Review-token subjects are normalized email addresses so future review responses can be matched to exact assigned principals. The control bearer remains a distinct `control-api` subject rather than impersonating a reviewer. A proposal may include `dependencies`, an array of exact admitted version IDs that must promote before the dependent version can promote. Root-intent bootstrap remains control-only.
 
 ```text
 GET  /v1/repos/{repoID}/intent

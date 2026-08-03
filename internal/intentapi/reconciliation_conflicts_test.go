@@ -11,6 +11,7 @@ import (
 	"github.com/sky-valley/gitrdone/internal/intent"
 	"github.com/sky-valley/gitrdone/internal/intentapi"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
+	"github.com/sky-valley/gitrdone/internal/requestauth"
 )
 
 func TestNativeIntentAPIRecordsAndReadsReconciliationConflict(t *testing.T) {
@@ -64,7 +65,7 @@ func TestNativeIntentAPIRecordsAndReadsReconciliationConflict(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "conflict-b-c")
 	recorder := httptest.NewRecorder()
 
-	handlers.RecordReconciliationConflict.ServeHTTP(recorder, intentapi.WithAuthenticatedProducer(request, "ion"))
+	handlers.RecordReconciliationConflict.ServeHTTP(recorder, requestauth.WithSubject(request, "ion"))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("record status = %d, want 200: %s", recorder.Code, recorder.Body.String())
@@ -122,7 +123,7 @@ func TestNativeIntentAPIRecordsAndReadsReconciliationConflict(t *testing.T) {
 	retry.Header.Set("Content-Type", "application/json")
 	retry.Header.Set("Idempotency-Key", "conflict-b-c")
 	retryRecorder := httptest.NewRecorder()
-	handlers.RecordReconciliationConflict.ServeHTTP(retryRecorder, intentapi.WithAuthenticatedProducer(retry, "ion"))
+	handlers.RecordReconciliationConflict.ServeHTTP(retryRecorder, requestauth.WithSubject(retry, "ion"))
 	if retryRecorder.Code != http.StatusOK {
 		t.Fatalf("retry status = %d, want 200: %s", retryRecorder.Code, retryRecorder.Body.String())
 	}
@@ -238,7 +239,7 @@ func TestNativeIntentAPIRecordsAndReadsReconciliationConflict(t *testing.T) {
 	resolvedConflictRetry.Header.Set("Content-Type", "application/json")
 	resolvedConflictRetry.Header.Set("Idempotency-Key", "conflict-b-c")
 	resolvedConflictRetryRecorder := httptest.NewRecorder()
-	handlers.RecordReconciliationConflict.ServeHTTP(resolvedConflictRetryRecorder, intentapi.WithAuthenticatedProducer(resolvedConflictRetry, "ion"))
+	handlers.RecordReconciliationConflict.ServeHTTP(resolvedConflictRetryRecorder, requestauth.WithSubject(resolvedConflictRetry, "ion"))
 	if resolvedConflictRetryRecorder.Code != http.StatusOK {
 		t.Fatalf("resolved conflict retry status = %d, want 200: %s", resolvedConflictRetryRecorder.Code, resolvedConflictRetryRecorder.Body.String())
 	}

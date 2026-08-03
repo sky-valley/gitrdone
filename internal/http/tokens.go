@@ -64,32 +64,25 @@ func createRepoTokenHandler(tokens repoTokenCreator, idempotency idempotencyDoer
 			return
 		}
 
-		request.Scope = strings.TrimSpace(request.Scope)
-		request.Subject = strings.TrimSpace(request.Subject)
-		if !isRepoTokenScope(request.Scope) {
-			writeError(w, http.StatusBadRequest, "scope must be read, write, or readwrite")
+		tokenInput, err := normalizeCreateRepoTokenInput(createRepoTokenInput{
+			RepoID:     repoID,
+			Scope:      request.Scope,
+			Subject:    request.Subject,
+			TTLSeconds: request.TTLSeconds,
+		})
+		if err != nil {
+			writeCreateRepoTokenError(w, err)
 			return
 		}
-		if request.Subject == "" {
-			writeError(w, http.StatusBadRequest, "subject is required")
-			return
-		}
-		if errMessage := validateTokenSubject(request.Subject); errMessage != "" {
-			writeError(w, http.StatusBadRequest, errMessage)
-			return
-		}
+		request.Scope = tokenInput.Scope
+		request.Subject = tokenInput.Subject
 		if request.TTLSeconds < 1 || request.TTLSeconds > maxRepoTokenTTLSeconds {
 			writeError(w, http.StatusBadRequest, "ttlSeconds must be between 1 and 604800")
 			return
 		}
 
 		create := func(createCtx context.Context) (createRepoTokenResponse, error) {
-			token, err := tokens.CreateRepoToken(createCtx, createRepoTokenInput{
-				RepoID:     repoID,
-				Scope:      request.Scope,
-				Subject:    request.Subject,
-				TTLSeconds: request.TTLSeconds,
-			})
+			token, err := tokens.CreateRepoToken(createCtx, tokenInput)
 			if err != nil {
 				return createRepoTokenResponse{}, err
 			}
@@ -188,16 +181,24 @@ func revokeRepoTokenHandler(tokens repoTokenRevoker) http.Handler {
 	})
 }
 
-func isRepoTokenScope(scope string) bool {
-	return scope == "read" || scope == "write" || scope == "readwrite"
-}
-
 func writeCreateRepoTokenError(w http.ResponseWriter, err error) {
-	if errors.Is(err, errIdempotencyConflict) {
+	switch {
+	case errors.Is(err, errRepoTokenScopeInvalid):
+		writeError(w, http.StatusBadRequest, "scope must be read, write, readwrite, or review")
+		return
+	case errors.Is(err, errRepoTokenSubjectRequired):
+		writeError(w, http.StatusBadRequest, "subject is required")
+		return
+	case errors.Is(err, errRepoTokenSubjectInvalid):
+		writeError(w, http.StatusBadRequest, tokenSubjectError())
+		return
+	case errors.Is(err, errRepoTokenReviewSubjectInvalid):
+		writeError(w, http.StatusBadRequest, "review subject must be a valid email address")
+		return
+	case errors.Is(err, errIdempotencyConflict):
 		writeError(w, http.StatusConflict, "idempotency key already used for a different token request")
 		return
-	}
-	if errors.Is(err, errRepoNotFound) {
+	case errors.Is(err, errRepoNotFound):
 		writeError(w, http.StatusNotFound, "repo not found")
 		return
 	}

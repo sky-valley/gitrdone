@@ -4,13 +4,13 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/sky-valley/gitrdone/internal/intentapi"
+	"github.com/sky-valley/gitrdone/internal/requestauth"
 )
 
 func repositoryAccessAuth(controlBearer string, access repoAccessAuthorizer, capability repoCapability, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if matchesControlBearer(r, controlBearer) {
-			next.ServeHTTP(w, intentapi.WithAuthenticatedProducer(r, "control-api"))
+			next.ServeHTTP(w, requestauth.WithSubject(r, "control-api"))
 			return
 		}
 		token := repoTokenFromRequest(r)
@@ -32,7 +32,7 @@ func repositoryAccessAuth(controlBearer string, access repoAccessAuthorizer, cap
 			writeRepoAccessError(w, err)
 			return
 		}
-		next.ServeHTTP(w, intentapi.WithAuthenticatedProducer(r, grant.Subject))
+		next.ServeHTTP(w, requestauth.WithSubject(r, grant.Subject))
 	})
 }
 

@@ -110,6 +110,7 @@ type repoCapability string
 const (
 	repoCapabilityInspect repoCapability = "inspect"
 	repoCapabilityPropose repoCapability = "propose"
+	repoCapabilityReview  repoCapability = "review"
 )
 
 type authorizeRepoAccessInput struct {
@@ -252,6 +253,11 @@ func (store *memoryRepoStore) GetRepo(ctx context.Context, input getRepoInput) (
 }
 
 func (store *memoryRepoStore) CreateRepoToken(ctx context.Context, input createRepoTokenInput) (repoTokenRecord, error) {
+	normalized, err := normalizeCreateRepoTokenInput(input)
+	if err != nil {
+		return repoTokenRecord{}, err
+	}
+	input = normalized
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
@@ -413,7 +419,7 @@ func sortRepoTokenRecords(tokens []repoTokenRecord) {
 func scopeAllowsGitOperation(scope string, operation gitOperation) bool {
 	switch operation {
 	case gitOperationRead:
-		return scope == "read" || scope == "readwrite"
+		return scope == "read" || scope == "readwrite" || scope == "review"
 	case gitOperationWrite:
 		return scope == "write" || scope == "readwrite"
 	default:
@@ -424,9 +430,11 @@ func scopeAllowsGitOperation(scope string, operation gitOperation) bool {
 func scopeAllowsRepoCapability(scope string, capability repoCapability) bool {
 	switch capability {
 	case repoCapabilityInspect:
-		return scope == "read" || scope == "readwrite"
+		return scope == "read" || scope == "readwrite" || scope == "review"
 	case repoCapabilityPropose:
 		return scope == "write" || scope == "readwrite"
+	case repoCapabilityReview:
+		return scope == "review"
 	default:
 		return false
 	}
