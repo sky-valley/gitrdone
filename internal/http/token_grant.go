@@ -2,8 +2,9 @@ package httpapi
 
 import (
 	"errors"
-	"net/mail"
 	"strings"
+
+	"github.com/sky-valley/gitrdone/internal/reviewidentity"
 )
 
 var errRepoTokenScopeInvalid = errors.New("repo token scope is invalid")
@@ -39,13 +40,5 @@ func isRepoTokenScope(scope string) bool {
 }
 
 func canonicalReviewSubject(subject string) (string, bool) {
-	canonical := strings.ToLower(strings.TrimSpace(subject))
-	if len(canonical) < 1 || len(canonical) > maxControlInputLength {
-		return "", false
-	}
-	address, err := mail.ParseAddress(canonical)
-	if err != nil || address.Address != canonical {
-		return "", false
-	}
-	return canonical, true
+	return reviewidentity.Canonical(subject)
 }

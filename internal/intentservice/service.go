@@ -20,6 +20,10 @@ type Repository interface {
 	Promote(ctx context.Context, request intent.PromoteRequest) (intent.Promoted, error)
 	Promotion(ctx context.Context, versionID intent.VersionID) (intent.Promoted, bool, error)
 	PendingJudgements(ctx context.Context, query intent.PendingJudgementQuery) (intent.PendingJudgementPage, error)
+	RunnableJudgements(ctx context.Context, query intent.PendingJudgementQuery) (intent.PendingJudgementPage, error)
+	ConcernAssessment(ctx context.Context, versionID intent.VersionID) (intent.ConcernAssessment, bool, error)
+	ConcernAssessmentContext(ctx context.Context, versionID intent.VersionID) (intent.ConcernAssessmentContext, error)
+	RecordConcernAssessment(ctx context.Context, assessment intent.ConcernAssessment) (intent.ConcernAssessment, error)
 	RecordReconciliationConflict(ctx context.Context, request intent.ReconciliationConflictRequest) (intent.ReconciliationConflictInspection, error)
 	ResolveReconciliationConflict(ctx context.Context, request intent.ResolveReconciliationConflictRequest) (intent.ResolvedReconciliationConflict, error)
 	ReconciliationConflict(ctx context.Context, id intent.ConflictID) (intent.ReconciliationConflictInspection, bool, error)
@@ -113,6 +117,38 @@ func (service *Service) PendingJudgements(ctx context.Context, repoID string, qu
 		return intent.PendingJudgementPage{}, err
 	}
 	return repository.PendingJudgements(ctx, query)
+}
+
+func (service *Service) RunnableJudgements(ctx context.Context, repoID string, query intent.PendingJudgementQuery) (intent.PendingJudgementPage, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.PendingJudgementPage{}, err
+	}
+	return repository.RunnableJudgements(ctx, query)
+}
+
+func (service *Service) ConcernAssessment(ctx context.Context, repoID string, versionID intent.VersionID) (intent.ConcernAssessment, bool, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.ConcernAssessment{}, false, err
+	}
+	return repository.ConcernAssessment(ctx, versionID)
+}
+
+func (service *Service) ConcernAssessmentContext(ctx context.Context, repoID string, versionID intent.VersionID) (intent.ConcernAssessmentContext, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.ConcernAssessmentContext{}, err
+	}
+	return repository.ConcernAssessmentContext(ctx, versionID)
+}
+
+func (service *Service) RecordConcernAssessment(ctx context.Context, repoID string, assessment intent.ConcernAssessment) (intent.ConcernAssessment, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.ConcernAssessment{}, err
+	}
+	return repository.RecordConcernAssessment(ctx, assessment)
 }
 
 func (service *Service) Bootstrap(ctx context.Context, repoID string, content intent.ContentRef) (intent.Revision, error) {

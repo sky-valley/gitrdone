@@ -18,6 +18,8 @@ var ErrContentNotAdmissible = errors.New("content cannot be admitted by the repo
 var ErrIdempotencyConflict = errors.New("idempotency key already used for a different operation")
 var ErrPromotionPending = errors.New("another promotion is pending reconciliation")
 var ErrDependenciesPending = errors.New("change dependencies are not promoted")
+var ErrConcernAssessmentAlreadyRecorded = errors.New("assessment is already recorded differently")
+var ErrReviewRequired = errors.New("human review is required")
 
 type ContentRef struct {
 	Engine   string
@@ -124,21 +126,22 @@ type TrunkProjection interface {
 }
 
 type Repository struct {
-	changeMu        sync.Mutex
-	promotionMu     sync.Mutex
-	stateMu         sync.RWMutex
-	current         Revision
-	admission       ContentAdmission
-	projection      TrunkProjection
-	intents         IntentStore
-	changes         ChangeStore
-	pending         PendingJudgementStore
-	amendments      AmendmentStore
-	reconciliations DependentReconciliationStore
-	rebases         HeldVersionRebaseStore
-	promotions      PromotionJournal
-	conflicts       ReconciliationConflictStore
-	conflict        *ProjectionConflict
+	changeMu           sync.Mutex
+	promotionMu        sync.Mutex
+	stateMu            sync.RWMutex
+	current            Revision
+	admission          ContentAdmission
+	projection         TrunkProjection
+	intents            IntentStore
+	changes            ChangeStore
+	pending            PendingJudgementStore
+	concernAssessments ConcernAssessmentStore
+	amendments         AmendmentStore
+	reconciliations    DependentReconciliationStore
+	rebases            HeldVersionRebaseStore
+	promotions         PromotionJournal
+	conflicts          ReconciliationConflictStore
+	conflict           *ProjectionConflict
 }
 
 func NewRepository(initial ContentRef, admission ContentAdmission, projection TrunkProjection) (*Repository, error) {
@@ -178,17 +181,18 @@ func OpenRepository(ctx context.Context, initial ContentRef, ledger Ledger, admi
 	}
 
 	repository := &Repository{
-		current:         current,
-		admission:       admission,
-		projection:      projection,
-		intents:         ledger,
-		changes:         ledger,
-		pending:         ledger,
-		amendments:      ledger,
-		reconciliations: ledger,
-		rebases:         ledger,
-		promotions:      ledger,
-		conflicts:       ledger,
+		current:            current,
+		admission:          admission,
+		projection:         projection,
+		intents:            ledger,
+		changes:            ledger,
+		pending:            ledger,
+		concernAssessments: ledger,
+		amendments:         ledger,
+		reconciliations:    ledger,
+		rebases:            ledger,
+		promotions:         ledger,
+		conflicts:          ledger,
 	}
 	if err := repository.Reconcile(ctx); err != nil {
 		var conflict *ProjectionConflict
@@ -407,6 +411,16 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 	}
 	if !found {
 		return Promoted{}, ErrVersionNotFound
+	}
+	assessment, assessmentFound, err := repository.concernAssessments.ConcernAssessment(ctx, version.ID)
+	if err != nil {
+		return Promoted{}, fmt.Errorf("read Version concern assessment: %w", err)
+	}
+	if assessmentFound && assessment.GoverningIntent != request.ExpectedIntent {
+		return Promoted{}, ErrIntentAdvanced
+	}
+	if assessmentFound && len(assessment.ReviewObligations()) > 0 {
+		return Promoted{}, ErrReviewRequired
 	}
 	dependencyPromotions := make([]Promoted, 0, len(version.Dependencies))
 	for _, dependencyID := range version.Dependencies {

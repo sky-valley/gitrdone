@@ -27,6 +27,12 @@ type PendingJudgementStore interface {
 	PendingJudgements(ctx context.Context, after VersionID, limit int) ([]Version, bool, error)
 }
 
+type ConcernAssessmentStore interface {
+	ConcernAssessment(ctx context.Context, versionID VersionID) (ConcernAssessment, bool, error)
+	RunnableJudgements(ctx context.Context, after VersionID, limit int) ([]Version, bool, error)
+	RecordConcernAssessment(ctx context.Context, assessment ConcernAssessment) error
+}
+
 type AmendmentStore interface {
 	Amendment(ctx context.Context, toVersion VersionID) (Amendment, bool, error)
 	AmendmentByIdempotencyKey(ctx context.Context, key string) (Amended, bool, error)
@@ -68,6 +74,7 @@ type Ledger interface {
 	IntentStore
 	ChangeStore
 	PendingJudgementStore
+	ConcernAssessmentStore
 	AmendmentStore
 	DependentReconciliationStore
 	HeldVersionRebaseStore
@@ -76,28 +83,29 @@ type Ledger interface {
 }
 
 type transientLedger struct {
-	mu                sync.RWMutex
-	current           Revision
-	revisions         map[RevisionID]Revision
-	changes           map[ChangeID]Change
-	versions          map[VersionID]Version
-	versionIDs        map[ChangeID][]VersionID
-	dependents        map[VersionID][]VersionID
-	pendingJudgements map[VersionID]struct{}
-	judgementIDs      []VersionID
-	amendments        map[VersionID]Amendment
-	reconciliations   map[VersionID]DependentReconciliation
-	reconciliationIDs []VersionID
-	rebases           map[VersionID]HeldVersionRebase
-	promotions        map[PromotionID]Promotion
-	prepared          map[PromotionID]PreparedPromotion
-	pending           PromotionID
-	completed         map[VersionID]PromotionID
-	byIntent          map[RevisionID]PromotionID
-	conflicts         map[ConflictID]ReconciliationConflict
-	conflictIDs       []ConflictID
-	resolutions       map[ConflictID]ReconciliationResolution
-	idempotency       map[string]transientIdempotencyRecord
+	mu                 sync.RWMutex
+	current            Revision
+	revisions          map[RevisionID]Revision
+	changes            map[ChangeID]Change
+	versions           map[VersionID]Version
+	versionIDs         map[ChangeID][]VersionID
+	dependents         map[VersionID][]VersionID
+	pendingJudgements  map[VersionID]struct{}
+	judgementIDs       []VersionID
+	concernAssessments map[VersionID]ConcernAssessment
+	amendments         map[VersionID]Amendment
+	reconciliations    map[VersionID]DependentReconciliation
+	reconciliationIDs  []VersionID
+	rebases            map[VersionID]HeldVersionRebase
+	promotions         map[PromotionID]Promotion
+	prepared           map[PromotionID]PreparedPromotion
+	pending            PromotionID
+	completed          map[VersionID]PromotionID
+	byIntent           map[RevisionID]PromotionID
+	conflicts          map[ConflictID]ReconciliationConflict
+	conflictIDs        []ConflictID
+	resolutions        map[ConflictID]ReconciliationResolution
+	idempotency        map[string]transientIdempotencyRecord
 }
 
 type transientIdempotencyOperation uint8
@@ -303,6 +311,7 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.dependents = make(map[VersionID][]VersionID)
 	ledger.pendingJudgements = make(map[VersionID]struct{})
 	ledger.judgementIDs = nil
+	ledger.concernAssessments = make(map[VersionID]ConcernAssessment)
 	ledger.amendments = make(map[VersionID]Amendment)
 	ledger.reconciliations = make(map[VersionID]DependentReconciliation)
 	ledger.rebases = make(map[VersionID]HeldVersionRebase)
@@ -459,6 +468,14 @@ func (ledger *transientLedger) PreparePromotion(_ context.Context, prepared Prep
 	version, found := ledger.versions[prepared.Promotion.VersionID]
 	if !found {
 		return ErrVersionNotFound
+	}
+	if assessment, found := ledger.concernAssessments[version.ID]; found {
+		if assessment.GoverningIntent != ledger.current.ID {
+			return ErrIntentAdvanced
+		}
+		if len(assessment.ReviewObligations()) > 0 {
+			return ErrReviewRequired
+		}
 	}
 	ids := ledger.versionIDs[version.ChangeID]
 	if len(ids) == 0 || ids[len(ids)-1] != version.ID {

@@ -225,6 +225,67 @@ func TestIntentRepositoryRegistryExcludesArchivedReposFromPendingJudgement(t *te
 	}
 }
 
+func TestFilesystemPendingSourceDoesNotClaimVersionsWaitingForHumanReview(t *testing.T) {
+	ctx := context.Background()
+	storageRoot := t.TempDir()
+	storage := newFilesystemGitStorage(storageRoot)
+	repos := newMemoryRepoStore(nil)
+	repos.gitStorage = storage
+	repo, err := repos.CreateRepo(ctx, createRepoInput{Namespace: "acme", Name: "held", DefaultBranch: "main"})
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	gitDir, err := storage.BareRepoPath(ctx, repo.ID)
+	if err != nil {
+		t.Fatalf("bare repo path: %v", err)
+	}
+	initialCommit := seedBareRepo(t, gitDir)
+	registry := newIntentRepositoryRegistry(storageRoot, repos, storage)
+	t.Cleanup(func() { _ = registry.Close() })
+	repository, err := registry.Resolve(ctx, formatRepoControlID(repo.ID))
+	if err != nil {
+		t.Fatalf("resolve repo: %v", err)
+	}
+	proposed, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "human-review-wait",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: initialCommit},
+		Producer:       "ion@example.com",
+	})
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if _, err := repository.RecordConcernAssessment(ctx, intent.ConcernAssessment{
+		VersionID:       proposed.Version.ID,
+		GoverningIntent: proposed.Version.BaseIntent,
+		Evaluations: []intent.ConcernEvaluation{{
+			Concern:        "architecture-data-infrastructure",
+			Prompt:         "Does this change modify architecture, data models, or infrastructure requirements?",
+			Reviewer:       "noam@example.com",
+			RequiresReview: true,
+			Reason:         "the candidate adds a database",
+			Evidence:       []string{"migrations/001.sql"},
+		}},
+	}); err != nil {
+		t.Fatalf("record judgement: %v", err)
+	}
+
+	pending, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list repository pending: %v", err)
+	}
+	if len(pending.Versions) != 1 {
+		t.Fatalf("repository pending = %#v, want held Version retained", pending)
+	}
+	page, err := newFilesystemPendingSource(registry).ListPending(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("list runnable pending work: %v", err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("runnable pending work = %#v, want human-review wait excluded", page.Items)
+	}
+}
+
 func seedBareRepo(t *testing.T, gitDir string) string {
 	t.Helper()
 	worktree := filepath.Join(t.TempDir(), "seed")

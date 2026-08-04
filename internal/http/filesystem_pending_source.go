@@ -58,7 +58,7 @@ func (source *filesystemPendingSource) ListPending(ctx context.Context, after st
 		if err != nil {
 			return judgement.PendingPage{}, fmt.Errorf("open pending repository %s: %w", repoID, err)
 		}
-		pending, err := repository.PendingJudgements(ctx, intent.PendingJudgementQuery{
+		pending, err := repository.RunnableJudgements(ctx, intent.PendingJudgementQuery{
 			After: afterVersion,
 			Limit: limit - len(page.Items),
 		})

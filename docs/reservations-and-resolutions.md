@@ -1061,3 +1061,37 @@ This slice does not introduce a user record, company directory, login flow, revi
 ### Agreed ownership rule
 
 > Authentication establishes who acted; judgement assigns who must act; request data may describe the response but never the responder.
+
+## Resolution 019: concern assessments are exact-Version evidence; human waits are derived obligations
+
+**Status:** Agreed and implemented for the durable concern-assessment slice
+
+### Reservation
+
+The pending runner needs to distinguish work that is ready for machine action from work that is correctly waiting for a human. Treating both as claimable would repeatedly lease a held Version. Persisting a mutable `held` status or a second review queue would create another lifecycle authority beside the repository ledger. Recording only a final approve/block boolean would also discard which concern applied, who must review it, why, and what exact candidate evidence justified the result.
+
+Resolution 004 defines Judgement as a continuing Change-level process with repeated triage and evidence events tied to exact Versions. Calling the first four-arm classification result `Judgement` would wrongly collapse that live process into one immutable per-Version verdict.
+
+The first team pilot has four independent concerns: architecture/data/infrastructure, design-system/UX, copy/commercial impact, and prompts/models. More than one may apply to the same Version, and every matching reviewer is required. Those team-specific prompts and reviewer subjects must remain configuration supplied to the judge, not concepts embedded in the generic repository model.
+
+### Resolution
+
+The repository records at most one immutable `ConcernAssessment` evidence fact for an exact Version in this pilot. It is the initial classification event within continuing Judgement, not the whole Judgement process. It contains:
+
+- the assessed Version ID;
+- the accepted Intent revision whose content governed the evaluation; and
+- an ordered evaluation from every configured concern, including concern name, the exact one-line prompt applied, assigned reviewer subject, whether review is required, a reason, and concrete evidence.
+
+The governing Intent must be the Version's recorded base. An assessment cannot be written for an unknown, superseded, or promotion-started Version. Exact replay is a true no-op; a different result cannot overwrite the first durable fact. An amendment, reconciliation, conflict resolution, or held-Version rebase creates a new Version and therefore requires a new assessment. The earlier fact remains audit history, but none of its review authority transfers. Later tests, actions, and human responses will be additional Judgement events rather than mutations of this assessment.
+
+Human-review obligations are derived from the evaluations that require review. Their stable first-slice identity is `{versionID, concern}`; reviewer, reason, and evidence come from the immutable assessment. The ledger does not separately store a mutable obligation row or a held status.
+
+`PendingJudgements` remains the broad repository view: both unassessed Versions and Versions waiting for human review are pending. `RunnableJudgements` is the worker projection: it includes unassessed Versions and durably cleared Versions awaiting promotion only while their governing Intent is still current, and excludes Versions with unresolved review obligations. A clear assessment is recorded before promotion, so a crash between those effects resumes promotion without invoking the evaluator again. Repository promotion itself rejects a Version with recorded unresolved review obligations; worker discovery is not the authority boundary. Temporarily, an unassessed Version remains promotable so the explicitly named approve-all migration path can continue until the real judge is wired.
+
+The concern processor accepts independent one-line concerns through a narrow evaluator interface. It supplies each arm an isolated copy of the exact repository ID, candidate Version, governing accepted Intent, prompt, and canonical reviewer subject. It records all arm results together. Any matching concern causes a human wait; no matches permits promotion; evaluator failure records no partial assessment and leaves the Version pending for retry. If canonical Intent advances, the old assessment remains evidence but no longer authorises promotion. That Version leaves the runnable projection until continuing Judgement can record re-triage or revalidation under the new governing state; this slice does not invent that later event prematurely.
+
+This slice deliberately does not select an LLM provider, load repository purpose/priorities, configure the team's real email subjects, expose review responses, or replace the deployed approve-all runtime. Those are subsequent operational slices. Before live wiring, the fixed pilot concern list must come from a repository-and-governing-Intent-specific source. Tests use a deterministic evaluator only to prove orchestration; it is not represented as live judgement.
+
+### Agreed ownership rule
+
+> Concern assessment is one exact-Version evidence event inside continuing Judgement; the repository derives who must respond and enforces that wait at promotion.

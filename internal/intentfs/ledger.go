@@ -360,6 +360,9 @@ func (ledger *Ledger) append(ctx context.Context, record journalRecord) error {
 	if err := validateRecord(&ledger.state, record); err != nil {
 		return err
 	}
+	if recordAlreadyApplied(&ledger.state, record) {
+		return nil
+	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("encode journal record: %w", err)
