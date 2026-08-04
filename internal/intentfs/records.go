@@ -20,6 +20,7 @@ const (
 	reconciliationConflictRecorded   = "reconciliation_conflict_recorded"
 	reconciliationResolutionRecorded = "reconciliation_resolution_recorded"
 	concernAssessmentRecorded        = "concern_assessment_recorded"
+	reviewResponseRecorded           = "review_response_recorded"
 )
 
 type journalState struct {
@@ -32,6 +33,8 @@ type journalState struct {
 	pendingJudgements  map[intent.VersionID]struct{}
 	judgementIDs       []intent.VersionID
 	concernAssessments map[intent.VersionID]intent.ConcernAssessment
+	reviewResponses    map[intent.VersionID][]intent.ReviewResponse
+	reviewResponseByID map[intent.ReviewResponseID]intent.ReviewResponse
 	amendments         map[intent.VersionID]intent.Amendment
 	reconciliations    map[intent.VersionID]intent.DependentReconciliation
 	reconciliationIDs  []intent.VersionID
@@ -56,12 +59,14 @@ const (
 	heldVersionRebaseOperation
 	reconciliationConflictOperation
 	reconciliationResolutionOperation
+	reviewResponseOperation
 )
 
 type idempotencyRecord struct {
 	operation  idempotencyOperation
 	versionID  intent.VersionID
 	conflictID intent.ConflictID
+	reviewID   intent.ReviewResponseID
 }
 
 type journalRecord struct {
@@ -80,6 +85,7 @@ type journalRecord struct {
 	ReconciliationConflict   *intent.ReconciliationConflict   `json:"reconciliation_conflict,omitempty"`
 	ReconciliationResolution *intent.ReconciliationResolution `json:"reconciliation_resolution,omitempty"`
 	ConcernAssessment        *intent.ConcernAssessment        `json:"concern_assessment,omitempty"`
+	ReviewResponse           *intent.ReviewResponse           `json:"review_response,omitempty"`
 }
 
 func normalizeLegacyRecord(state *journalState, record journalRecord) journalRecord {
@@ -122,17 +128,30 @@ func validateRecord(state *journalState, record journalRecord) error {
 		return validateReconciliationResolution(state, record)
 	case concernAssessmentRecorded:
 		return validateConcernAssessment(state, record)
+	case reviewResponseRecorded:
+		return validateReviewResponse(state, record)
 	default:
 		return fmt.Errorf("unknown journal record kind %q", record.Kind)
 	}
 }
 
 func recordAlreadyApplied(state *journalState, record journalRecord) bool {
-	if record.Kind != concernAssessmentRecorded || record.ConcernAssessment == nil {
+	switch record.Kind {
+	case concernAssessmentRecorded:
+		if record.ConcernAssessment == nil {
+			return false
+		}
+		_, found := state.concernAssessments[record.ConcernAssessment.VersionID]
+		return found
+	case reviewResponseRecorded:
+		if record.ReviewResponse == nil {
+			return false
+		}
+		_, found := state.reviewResponseByID[record.ReviewResponse.ID]
+		return found
+	default:
 		return false
 	}
-	_, found := state.concernAssessments[record.ConcernAssessment.VersionID]
-	return found
 }
 
 func validateReconciliationConflict(state *journalState, record journalRecord) error {
@@ -378,7 +397,7 @@ func validatePreparedPromotion(state *journalState, record journalRecord) error 
 		if assessment.GoverningIntent != state.current.ID {
 			return intent.ErrIntentAdvanced
 		}
-		if len(assessment.ReviewObligations()) > 0 {
+		if len(unresolvedReviewObligations(assessment, state.reviewResponses[version.ID])) > 0 {
 			return intent.ErrReviewRequired
 		}
 	}
@@ -420,6 +439,8 @@ func newJournalState() journalState {
 		dependents:         make(map[intent.VersionID][]intent.VersionID),
 		pendingJudgements:  make(map[intent.VersionID]struct{}),
 		concernAssessments: make(map[intent.VersionID]intent.ConcernAssessment),
+		reviewResponses:    make(map[intent.VersionID][]intent.ReviewResponse),
+		reviewResponseByID: make(map[intent.ReviewResponseID]intent.ReviewResponse),
 		amendments:         make(map[intent.VersionID]intent.Amendment),
 		reconciliations:    make(map[intent.VersionID]intent.DependentReconciliation),
 		rebases:            make(map[intent.VersionID]intent.HeldVersionRebase),
@@ -513,6 +534,13 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 	case concernAssessmentRecorded:
 		if _, exists := state.concernAssessments[record.ConcernAssessment.VersionID]; !exists {
 			state.concernAssessments[record.ConcernAssessment.VersionID] = cloneConcernAssessment(*record.ConcernAssessment)
+		}
+	case reviewResponseRecorded:
+		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
+			response := *record.ReviewResponse
+			state.reviewResponses[response.VersionID] = append(state.reviewResponses[response.VersionID], response)
+			state.reviewResponseByID[response.ID] = response
+			state.idempotency[record.IdempotencyKey] = idempotencyRecord{operation: reviewResponseOperation, reviewID: response.ID}
 		}
 	}
 }

@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/getsentry/sentry-go v0.47.0
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/sky-valley/pi v0.83.16
 	golang.org/x/sys v0.44.0
 )
 

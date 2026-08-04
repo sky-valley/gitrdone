@@ -21,6 +21,8 @@ import (
 	sentryhttp "github.com/getsentry/sentry-go/http"
 
 	httpapi "github.com/sky-valley/gitrdone/internal/http"
+	"github.com/sky-valley/gitrdone/internal/judgement"
+	"github.com/sky-valley/gitrdone/internal/judgementpi"
 )
 
 const (
@@ -48,6 +50,8 @@ type config struct {
 	storageRoot            string
 	databaseURL            string
 	judgementWorkers       int
+	judgementModel         string
+	anthropicAPIKey        string
 	maxLFSObjectBytes      int64
 	trustedProxyPrefixes   []netip.Prefix
 	shutdownTimeout        time.Duration
@@ -145,6 +149,13 @@ func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error,
 		TrustedProxyPrefixes: cfg.trustedProxyPrefixes,
 	}
 	runtimeConfig := httpapi.PendingRuntimeConfig{Workers: cfg.judgementWorkers}
+	if cfg.judgementWorkers > 0 {
+		evaluator, err := judgementpi.NewEvaluator(cfg.anthropicAPIKey, cfg.judgementModel)
+		if err != nil {
+			return nil, nil, fmt.Errorf("configure judgement evaluator: %w", err)
+		}
+		runtimeConfig.ProcessorFactory = judgement.NewConcernProcessorFactory(evaluator)
+	}
 	var handler http.Handler
 	var closeServer func() error
 	if cfg.databaseURL != "" {
@@ -155,7 +166,11 @@ func newHTTPServer(ctx context.Context, cfg config) (*http.Server, func() error,
 		handler = postgresHandler
 		closeServer = closePostgres
 	} else {
-		handler, closeServer = httpapi.NewServerWithPendingRunner(httpConfig, runtimeConfig)
+		var err error
+		handler, closeServer, err = httpapi.NewServerWithPendingRunner(httpConfig, runtimeConfig)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	if cfg.sentryDSN != "" {
 		sentryHandler := sentryhttp.New(sentryhttp.Options{
@@ -187,6 +202,8 @@ func configFromEnv(getenv func(string) string) (config, error) {
 		controlBearer:        strings.TrimSpace(getenv("GITRDONE_CONTROL_BEARER")),
 		databaseURL:          strings.TrimSpace(getenv("GITRDONE_DATABASE_URL")),
 		storageRoot:          strings.TrimSpace(getenv("GITRDONE_STORAGE_ROOT")),
+		judgementModel:       strings.TrimSpace(getenv("GITRDONE_JUDGEMENT_MODEL")),
+		anthropicAPIKey:      strings.TrimSpace(getenv("ANTHROPIC_API_KEY")),
 		sentryDSN:            strings.TrimSpace(getenv("SENTRY_DSN")),
 		sentryEnvironment:    strings.TrimSpace(getenv("SENTRY_ENVIRONMENT")),
 		sentryRelease:        strings.TrimSpace(getenv("SENTRY_RELEASE")),
@@ -234,8 +251,14 @@ func configFromEnv(getenv func(string) string) (config, error) {
 	if cfg.storageRoot == "" {
 		cfg.storageRoot = defaultStorageRoot
 	}
+	if cfg.judgementModel == "" {
+		cfg.judgementModel = judgementpi.DefaultModelID
+	}
 	if cfg.controlBearer == "" {
 		return config{}, errors.New("GITRDONE_CONTROL_BEARER is required")
+	}
+	if cfg.judgementWorkers > 0 && cfg.anthropicAPIKey == "" {
+		return config{}, errors.New("ANTHROPIC_API_KEY is required when GITRDONE_JUDGEMENT_WORKERS is greater than zero")
 	}
 	return cfg, nil
 }

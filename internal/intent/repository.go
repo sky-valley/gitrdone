@@ -136,6 +136,7 @@ type Repository struct {
 	changes            ChangeStore
 	pending            PendingJudgementStore
 	concernAssessments ConcernAssessmentStore
+	reviewResponses    ReviewResponseStore
 	amendments         AmendmentStore
 	reconciliations    DependentReconciliationStore
 	rebases            HeldVersionRebaseStore
@@ -188,6 +189,7 @@ func OpenRepository(ctx context.Context, initial ContentRef, ledger Ledger, admi
 		changes:            ledger,
 		pending:            ledger,
 		concernAssessments: ledger,
+		reviewResponses:    ledger,
 		amendments:         ledger,
 		reconciliations:    ledger,
 		rebases:            ledger,
@@ -419,8 +421,14 @@ func (repository *Repository) Promote(ctx context.Context, request PromoteReques
 	if assessmentFound && assessment.GoverningIntent != request.ExpectedIntent {
 		return Promoted{}, ErrIntentAdvanced
 	}
-	if assessmentFound && len(assessment.ReviewObligations()) > 0 {
-		return Promoted{}, ErrReviewRequired
+	if assessmentFound {
+		responses, err := repository.reviewResponses.ReviewResponses(ctx, version.ID)
+		if err != nil {
+			return Promoted{}, fmt.Errorf("read Version review responses: %w", err)
+		}
+		if len(unresolvedReviewObligations(assessment, responses)) > 0 {
+			return Promoted{}, ErrReviewRequired
+		}
 	}
 	dependencyPromotions := make([]Promoted, 0, len(version.Dependencies))
 	for _, dependencyID := range version.Dependencies {

@@ -25,6 +25,8 @@ type Handlers struct {
 	GetReconciliationConflict    http.Handler
 	GetChange                    http.Handler
 	ListVersions                 http.Handler
+	ListReviews                  http.Handler
+	RecordReviewResponse         http.Handler
 }
 
 func NewHandlers(service *intentservice.Service) Handlers {
@@ -37,6 +39,8 @@ func NewHandlers(service *intentservice.Service) Handlers {
 		GetReconciliationConflict:    getReconciliationConflictHandler(service),
 		GetChange:                    getChangeHandler(service),
 		ListVersions:                 listVersionsHandler(service),
+		ListReviews:                  listReviewsHandler(service),
+		RecordReviewResponse:         recordReviewResponseHandler(service),
 	}
 }
 

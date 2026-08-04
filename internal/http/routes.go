@@ -22,6 +22,8 @@ type Handlers struct {
 	GetReconciliationConflict    http.Handler
 	GetChange                    http.Handler
 	ListVersions                 http.Handler
+	ListReviews                  http.Handler
+	RecordReviewResponse         http.Handler
 	GitSmartHTTP                 http.Handler
 	GitLFS                       http.Handler
 	GitShowDiff                  http.Handler
@@ -63,6 +65,8 @@ func NewMux(h Handlers) *http.ServeMux {
 	getReconciliationConflict := handlerOrNotFound(h.GetReconciliationConflict)
 	getChange := handlerOrNotFound(h.GetChange)
 	listVersions := handlerOrNotFound(h.ListVersions)
+	listReviews := handlerOrNotFound(h.ListReviews)
+	recordReviewResponse := handlerOrNotFound(h.RecordReviewResponse)
 	mux.Handle("GET /v1/repos/{repoID}/intent", currentIntent)
 	mux.Handle("PUT /v1/repos/{repoID}/intent", handlerOrNotFound(h.BootstrapIntent))
 	mux.Handle("POST /v1/repos/{repoID}/proposals", admitProposal)
@@ -71,6 +75,8 @@ func NewMux(h Handlers) *http.ServeMux {
 	mux.Handle("GET /v1/repos/{repoID}/reconciliation-conflicts/{conflictID}", getReconciliationConflict)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}", getChange)
 	mux.Handle("GET /v1/repos/{repoID}/changes/{changeID}/versions", listVersions)
+	mux.Handle("GET /v1/repos/{repoID}/reviews", listReviews)
+	mux.Handle("POST /v1/repos/{repoID}/review-responses", recordReviewResponse)
 
 	gitSmartHTTP := gitRepoRoute(h.GitSmartHTTP)
 	mux.Handle("GET /git/repos/{repoGitID}/{gitPath...}", gitSmartHTTP)

@@ -14,9 +14,15 @@ type ConcernEvaluation struct {
 	Concern        string
 	Prompt         string
 	Reviewer       string
+	Provenance     EvaluatorProvenance
 	RequiresReview bool
 	Reason         string
 	Evidence       []string
+}
+
+type EvaluatorProvenance struct {
+	Evaluator        string
+	ContractRevision string
 }
 
 type ConcernAssessment struct {
@@ -26,11 +32,12 @@ type ConcernAssessment struct {
 }
 
 type ReviewObligation struct {
-	VersionID VersionID
-	Concern   string
-	Reviewer  string
-	Reason    string
-	Evidence  []string
+	VersionID      VersionID
+	Concern        string
+	Reviewer       string
+	Reason         string
+	Evidence       []string
+	LatestResponse *ReviewResponse
 }
 
 type ConcernAssessmentContext struct {
@@ -133,6 +140,7 @@ func (ledger *transientLedger) RunnableJudgements(_ context.Context, after Versi
 		ledger.judgementIDs,
 		ledger.pendingJudgements,
 		ledger.concernAssessments,
+		ledger.reviewResponses,
 		ledger.versions,
 		ledger.current.ID,
 		after,
@@ -184,6 +192,9 @@ func validateConcernAssessmentShape(assessment ConcernAssessment) error {
 		if reviewer, valid := reviewidentity.Canonical(evaluation.Reviewer); !valid || reviewer != evaluation.Reviewer {
 			return errors.New("assessment reviewer must be a canonical email subject")
 		}
+		if err := validateEvaluatorProvenance(evaluation.Provenance); err != nil {
+			return err
+		}
 		if _, duplicate := concerns[evaluation.Concern]; duplicate {
 			return errors.New("assessment concerns must be unique")
 		}
@@ -193,6 +204,22 @@ func validateConcernAssessmentShape(assessment ConcernAssessment) error {
 				return errors.New("assessment evidence must not be empty")
 			}
 		}
+	}
+	return nil
+}
+
+func validateEvaluatorProvenance(provenance EvaluatorProvenance) error {
+	if provenance == (EvaluatorProvenance{}) {
+		return nil
+	}
+	if provenance.Evaluator == "" || provenance.ContractRevision == "" ||
+		provenance.Evaluator != strings.TrimSpace(provenance.Evaluator) ||
+		provenance.ContractRevision != strings.TrimSpace(provenance.ContractRevision) ||
+		strings.ContainsAny(provenance.Evaluator+provenance.ContractRevision, "\r\n") {
+		return errors.New("assessment evaluator provenance requires canonical evaluator and contract revision")
+	}
+	if len(provenance.Evaluator) > 256 || len(provenance.ContractRevision) > 128 {
+		return errors.New("assessment evaluator provenance is too large")
 	}
 	return nil
 }
@@ -231,6 +258,7 @@ func runnableJudgements(
 	ordered []VersionID,
 	pending map[VersionID]struct{},
 	concernAssessments map[VersionID]ConcernAssessment,
+	reviewResponses map[VersionID][]ReviewResponse,
 	versions map[VersionID]Version,
 	currentIntent RevisionID,
 	after VersionID,
@@ -248,24 +276,24 @@ func runnableJudgements(
 	index := start
 	for ; index < len(ordered) && len(result) < limit; index++ {
 		id := ordered[index]
-		if runnableJudgement(id, pending, concernAssessments, currentIntent) {
+		if runnableJudgement(id, pending, concernAssessments, reviewResponses, currentIntent) {
 			result = append(result, cloneVersion(versions[id]))
 		}
 	}
 	for ; index < len(ordered); index++ {
-		if runnableJudgement(ordered[index], pending, concernAssessments, currentIntent) {
+		if runnableJudgement(ordered[index], pending, concernAssessments, reviewResponses, currentIntent) {
 			return result, true, nil
 		}
 	}
 	return result, false, nil
 }
 
-func runnableJudgement(versionID VersionID, pending map[VersionID]struct{}, concernAssessments map[VersionID]ConcernAssessment, currentIntent RevisionID) bool {
+func runnableJudgement(versionID VersionID, pending map[VersionID]struct{}, concernAssessments map[VersionID]ConcernAssessment, reviewResponses map[VersionID][]ReviewResponse, currentIntent RevisionID) bool {
 	if _, found := pending[versionID]; !found {
 		return false
 	}
 	assessment, assessed := concernAssessments[versionID]
-	return !assessed || assessment.GoverningIntent == currentIntent && len(assessment.ReviewObligations()) == 0
+	return !assessed || assessment.GoverningIntent == currentIntent && len(unresolvedReviewObligations(assessment, reviewResponses[versionID])) == 0
 }
 
 func cloneConcernAssessment(assessment ConcernAssessment) ConcernAssessment {
@@ -282,7 +310,7 @@ func concernAssessmentsEqual(left, right ConcernAssessment) bool {
 	}
 	for index := range left.Evaluations {
 		l, r := left.Evaluations[index], right.Evaluations[index]
-		if l.Concern != r.Concern || l.Prompt != r.Prompt || l.Reviewer != r.Reviewer || l.RequiresReview != r.RequiresReview || l.Reason != r.Reason || !slices.Equal(l.Evidence, r.Evidence) {
+		if l.Concern != r.Concern || l.Prompt != r.Prompt || l.Reviewer != r.Reviewer || l.Provenance != r.Provenance || l.RequiresReview != r.RequiresReview || l.Reason != r.Reason || !slices.Equal(l.Evidence, r.Evidence) {
 			return false
 		}
 	}

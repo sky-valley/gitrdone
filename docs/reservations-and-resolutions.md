@@ -1095,3 +1095,44 @@ This slice deliberately does not select an LLM provider, load repository purpose
 ### Agreed ownership rule
 
 > Concern assessment is one exact-Version evidence event inside continuing Judgement; the repository derives who must respond and enforces that wait at promotion.
+
+## Resolution 020: accepted repository guidance drives live concern arms; human answers are immutable events
+
+**Status:** Agreed and implemented for the first operable judgement slice
+
+### Reservation
+
+A fixed concern list in application code would make the first team pilot work while quietly turning team structure into gitrdone's product model. Reading priorities from candidate content would let a proposal change the authority that judges itself. Silently retaining the approve-all processor in production would make an enabled worker look like judgement while bypassing it. A mutable approval flag would discard authorship, rationale, exact-Version scope, ordering, and idempotent restart behavior.
+
+Provider integration also needs a replaceable boundary. gitrdone should use the Go pi work already owned by Sky Valley rather than grow another Anthropic client, but pi, Anthropic, and the selected model must remain adapters rather than repository semantics.
+
+### Resolution
+
+The first operable judge loads `.gitrdone/purpose.md` and `.gitrdone/priorities.md` from the accepted Intent recorded as the candidate Version's base. Candidate content supplies only bounded comparison evidence. The pilot priorities file defines independent concern sections with a concern name, canonical reviewer email, and one-line natural-language question. This small parser is the current repository-guidance contract, not a general static workflow language. Missing, malformed, or unreadable accepted guidance fails closed and leaves work pending.
+
+For the Cove rehearsal the purpose is: “A calm workplace chat application for team channels, direct messages, and presence, deliberately designed without notification-driven urgency.” The initial concern ownership is:
+
+- architecture, data models, and infrastructure requirements: `noam@skyvalley.ac`;
+- design system and user experience: `ion@skyvalley.ac`;
+- copywriting and commercial impact: `iris@skyvalley.ac`;
+- prompts, model selection, and LLM usage: `jules@skyvalley.ac`.
+
+Each concern is evaluated independently through a narrow evaluator interface. The production adapter embeds Sky Valley's Go pi module and currently selects Anthropic Claude Sonnet 5 by default. The API key enters only through process configuration. Enabling judgement workers without an explicit processor is an error; the approve-all processor remains available only when a fixture or migration composition names it deliberately.
+
+Each persisted concern evaluation also records a bounded opaque evaluator reference and prompt-contract revision. This is audit provenance, not provider authority: it explains which interpreter produced an immutable fact while keeping pi, Anthropic, and model selection outside repository semantics. Changing the system prompt or interpretation contract requires a new contract revision.
+
+A human answer is an immutable `ReviewResponse` against the stable obligation identity `{versionID, concern}`. It records the authenticated assigned reviewer, `approved` or `changes_requested`, and a non-empty rationale. Exact retry returns the same response; reusing an idempotency key differently fails. The latest response for that exact obligation determines whether it remains open. Approval makes the Version runnable for promotion; requesting changes leaves the obligation visible with its rationale. Replacement Versions do not inherit answers.
+
+The filesystem ledger journals and restores responses and idempotency records. Both worker discovery and promotion derive unresolved obligations from assessment plus response history; neither trusts an in-memory lease or transport response. Review tokens expose a thin list-and-respond API, and `grd` renders short local handles rather than forcing humans to manipulate Version IDs. Later Postgres storage can implement the same store contracts and ordering without changing repository semantics.
+
+Review-list cursors refer to immutable assessment order, so promotion, approval, or replacement of the cursor Version between pages does not invalidate the continuation. `grd` persists a random response-operation key before sending; network retries reuse it until the response is confirmed, and a later intentional response receives a fresh key even when its decision and rationale repeat older text.
+
+Processor failures release their logical lease. The current runner then applies a bounded, disposable in-memory exponential cooldown for that work key. This prevents malformed guidance, permanent model output errors, or a failing later concern arm from producing an unbounded rapid API loop without turning failure timing into Version state or a second durable queue. Restart may forget the cooldown and safely rediscover the still-pending Version.
+
+### Model choice
+
+Sonnet 5 is the initial default because this job is repeated, bounded classification over explicit evidence, not frontier open-ended research. Opus remains an escalation option if observed disagreements or subtle architectural cases justify its additional cost and latency. The model remains configuration and may change without rewriting recorded repository facts.
+
+### Agreed ownership rule
+
+> Accepted repository text supplies concern authority; model providers supply interpretation; authenticated immutable responses resolve human obligations; only repository promotion turns the result into intent.

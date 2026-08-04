@@ -24,6 +24,9 @@ type Repository interface {
 	ConcernAssessment(ctx context.Context, versionID intent.VersionID) (intent.ConcernAssessment, bool, error)
 	ConcernAssessmentContext(ctx context.Context, versionID intent.VersionID) (intent.ConcernAssessmentContext, error)
 	RecordConcernAssessment(ctx context.Context, assessment intent.ConcernAssessment) (intent.ConcernAssessment, error)
+	PendingReviews(ctx context.Context, query intent.PendingReviewQuery) (intent.PendingReviewPage, error)
+	UnresolvedReviewObligations(ctx context.Context, versionID intent.VersionID) ([]intent.ReviewObligation, error)
+	RecordReviewResponse(ctx context.Context, request intent.ReviewResponseRequest) (intent.ReviewResponse, error)
 	RecordReconciliationConflict(ctx context.Context, request intent.ReconciliationConflictRequest) (intent.ReconciliationConflictInspection, error)
 	ResolveReconciliationConflict(ctx context.Context, request intent.ResolveReconciliationConflictRequest) (intent.ResolvedReconciliationConflict, error)
 	ReconciliationConflict(ctx context.Context, id intent.ConflictID) (intent.ReconciliationConflictInspection, bool, error)
@@ -149,6 +152,30 @@ func (service *Service) RecordConcernAssessment(ctx context.Context, repoID stri
 		return intent.ConcernAssessment{}, err
 	}
 	return repository.RecordConcernAssessment(ctx, assessment)
+}
+
+func (service *Service) PendingReviews(ctx context.Context, repoID string, query intent.PendingReviewQuery) (intent.PendingReviewPage, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.PendingReviewPage{}, err
+	}
+	return repository.PendingReviews(ctx, query)
+}
+
+func (service *Service) UnresolvedReviewObligations(ctx context.Context, repoID string, versionID intent.VersionID) ([]intent.ReviewObligation, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	return repository.UnresolvedReviewObligations(ctx, versionID)
+}
+
+func (service *Service) RecordReviewResponse(ctx context.Context, repoID string, request intent.ReviewResponseRequest) (intent.ReviewResponse, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.ReviewResponse{}, err
+	}
+	return repository.RecordReviewResponse(ctx, request)
 }
 
 func (service *Service) Bootstrap(ctx context.Context, repoID string, content intent.ContentRef) (intent.Revision, error) {

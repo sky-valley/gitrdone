@@ -104,7 +104,7 @@ The matrix describes intended journeys, not the behaviour of the currently deplo
 
 ## Journey 1: submit and promote immediately
 
-With `GITRDONE_JUDGEMENT_WORKERS` enabled, the server runs a separate temporary approve-all processor. `grd submit` still reports the truthful admission result as pending, while the runner may promote the Version immediately afterward and advance intent and canonical trunk. The setting defaults to disabled; journey fixtures that need to stage a hold leave it disabled or drive promotion explicitly. Submission itself never runs judgement synchronously.
+With `GITRDONE_JUDGEMENT_WORKERS` enabled, the server runs the repository-governed concern processor through the configured model provider. `grd submit` still reports the truthful admission result as pending, while the runner may later promote the Version or hold it for assigned review. The setting defaults to disabled; journey fixtures may use an explicitly selected approve-all processor when they need deterministic mechanics without live judgement. Submission itself never runs judgement synchronously.
 
 Baseline:
 

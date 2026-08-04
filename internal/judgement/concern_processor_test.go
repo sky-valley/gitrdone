@@ -10,6 +10,11 @@ import (
 	"github.com/sky-valley/gitrdone/internal/judgement"
 )
 
+var testEvaluatorProvenance = intent.EvaluatorProvenance{
+	Evaluator:        "test://concern-evaluator",
+	ContractRevision: "test.concern-assessment/v1",
+}
+
 func TestConcernProcessorRecordsAllMatchingHumanReviewObligationsAgainstExactVersion(t *testing.T) {
 	version, governing := judgementFixture()
 	service := &recordingConcernService{context: intent.ConcernAssessmentContext{Version: version, GoverningIntent: governing}}
@@ -45,6 +50,9 @@ func TestConcernProcessorRecordsAllMatchingHumanReviewObligationsAgainstExactVer
 		if request.RepoID != "repo_app" || !reflect.DeepEqual(request.Version, version) || request.GoverningIntent != governing {
 			t.Fatalf("evaluation request = %#v, want exact repo, Version, and governing Intent", request)
 		}
+		if request.Purpose != "test purpose" || request.Priorities != "test priorities" || request.ChangeEvidence != "test change evidence" {
+			t.Fatalf("evaluation repository inputs = %#v", request)
+		}
 	}
 	want := intent.ConcernAssessment{
 		VersionID:       version.ID,
@@ -54,6 +62,7 @@ func TestConcernProcessorRecordsAllMatchingHumanReviewObligationsAgainstExactVer
 				Concern:        "architecture-data-infrastructure",
 				Prompt:         "Does this change modify architecture, data models, or infrastructure requirements?",
 				Reviewer:       "noam@example.com",
+				Provenance:     testEvaluatorProvenance,
 				RequiresReview: true,
 				Reason:         "adds a persistent reservation model and DATABASE_URL",
 				Evidence:       []string{"internal/reservation/model.go", "cmd/app/config.go"},
@@ -61,24 +70,27 @@ func TestConcernProcessorRecordsAllMatchingHumanReviewObligationsAgainstExactVer
 			{
 				Concern:        "design-system-user-experience",
 				Prompt:         "Does this change modify the design system or user experience?",
-				Reviewer:       "yon@example.com",
+				Reviewer:       "ion@example.com",
+				Provenance:     testEvaluatorProvenance,
 				RequiresReview: true,
 				Reason:         "changes the booking form interaction",
 				Evidence:       []string{"web/booking-form.tsx"},
 			},
 			{
-				Concern:  "copy-commercial-impact",
-				Prompt:   "Does this change modify copywriting or commercial behavior?",
-				Reviewer: "iris@example.com",
-				Reason:   "no copy or commercial behavior changed",
-				Evidence: []string{"no customer-facing text in the candidate diff"},
+				Concern:    "copy-commercial-impact",
+				Prompt:     "Does this change modify copywriting or commercial behavior?",
+				Reviewer:   "iris@example.com",
+				Provenance: testEvaluatorProvenance,
+				Reason:     "no copy or commercial behavior changed",
+				Evidence:   []string{"no customer-facing text in the candidate diff"},
 			},
 			{
-				Concern:  "prompts-models",
-				Prompt:   "Does this change modify prompts, LLM usage, or model selection?",
-				Reviewer: "joule@example.com",
-				Reason:   "no prompt, model, or LLM use changed",
-				Evidence: []string{"no model integration files in the candidate diff"},
+				Concern:    "prompts-models",
+				Prompt:     "Does this change modify prompts, LLM usage, or model selection?",
+				Reviewer:   "jules@example.com",
+				Provenance: testEvaluatorProvenance,
+				Reason:     "no prompt, model, or LLM use changed",
+				Evidence:   []string{"no model integration files in the candidate diff"},
 			},
 		},
 	}
@@ -89,8 +101,8 @@ func TestConcernProcessorRecordsAllMatchingHumanReviewObligationsAgainstExactVer
 		t.Fatalf("promotions = %#v, want none while human reviews are required", service.promotions)
 	}
 	obligations := service.recorded.ReviewObligations()
-	if len(obligations) != 2 || obligations[0].Reviewer != "noam@example.com" || obligations[1].Reviewer != "yon@example.com" {
-		t.Fatalf("review obligations = %#v, want Noam and Yon", obligations)
+	if len(obligations) != 2 || obligations[0].Reviewer != "noam@example.com" || obligations[1].Reviewer != "ion@example.com" {
+		t.Fatalf("review obligations = %#v, want Noam and Ion", obligations)
 	}
 }
 
@@ -163,13 +175,10 @@ func TestConcernProcessorIsolatesExactVersionInputBetweenEvaluatorArms(t *testin
 	wantDependencies := append([]intent.VersionID(nil), version.Dependencies...)
 	service := &recordingConcernService{context: intent.ConcernAssessmentContext{Version: version, GoverningIntent: governing}}
 	evaluator := &mutatingEvaluator{}
-	processor, err := judgement.NewConcernProcessor(service, evaluator, []judgement.Concern{
+	processor := newConcernProcessor(t, service, evaluator, []judgement.Concern{
 		{Name: "first", Prompt: "Does the first concern apply?", Reviewer: "first@example.com"},
 		{Name: "second", Prompt: "Does the second concern apply?", Reviewer: "second@example.com"},
 	})
-	if err != nil {
-		t.Fatalf("new concern processor: %v", err)
-	}
 
 	if err := processor.Process(context.Background(), judgement.WorkItem{RepoID: "repo_app", VersionID: version.ID}); err != nil {
 		t.Fatalf("process Version: %v", err)
@@ -182,7 +191,7 @@ func TestConcernProcessorIsolatesExactVersionInputBetweenEvaluatorArms(t *testin
 func TestConcernProcessorCanonicalizesReviewerAuthority(t *testing.T) {
 	version, governing := judgementFixture()
 	service := &recordingConcernService{context: intent.ConcernAssessmentContext{Version: version, GoverningIntent: governing}}
-	processor, err := judgement.NewConcernProcessor(service, &recordingEvaluator{defaultResult: judgement.ConcernResult{
+	processor := newConcernProcessor(t, service, &recordingEvaluator{defaultResult: judgement.ConcernResult{
 		RequiresReview: true,
 		Reason:         "the candidate changes architecture",
 		Evidence:       []string{"internal/model.go"},
@@ -191,9 +200,6 @@ func TestConcernProcessorCanonicalizesReviewerAuthority(t *testing.T) {
 		Prompt:   "Does this change modify architecture?",
 		Reviewer: " Noam+GitRDone@Company.Example ",
 	}})
-	if err != nil {
-		t.Fatalf("new concern processor: %v", err)
-	}
 	if err := processor.Process(context.Background(), judgement.WorkItem{RepoID: "repo_app", VersionID: version.ID}); err != nil {
 		t.Fatalf("process Version: %v", err)
 	}
@@ -232,7 +238,7 @@ func TestConcernProcessorDoesNotTreatOldAssessmentAsAuthorityAfterParentAdvances
 		t.Fatalf("propose dependent: %v", err)
 	}
 	service := &repositoryConcernService{repository: repository}
-	processor, err := judgement.NewConcernProcessor(service, &recordingEvaluator{defaultResult: judgement.ConcernResult{
+	processor := newConcernProcessor(t, service, &recordingEvaluator{defaultResult: judgement.ConcernResult{
 		Reason:   "the concern does not apply",
 		Evidence: []string{"no matching semantic change"},
 	}}, []judgement.Concern{{
@@ -240,9 +246,6 @@ func TestConcernProcessorDoesNotTreatOldAssessmentAsAuthorityAfterParentAdvances
 		Prompt:   "Does this change modify architecture, data models, or infrastructure requirements?",
 		Reviewer: "noam@example.com",
 	}})
-	if err != nil {
-		t.Fatalf("new concern processor: %v", err)
-	}
 	item := judgement.WorkItem{RepoID: "repo_app", VersionID: dependent.Version.ID}
 	if err := processor.Process(ctx, item); err != nil {
 		t.Fatalf("assess dependent before parent promotion: %v", err)
@@ -276,16 +279,36 @@ func TestConcernProcessorDoesNotTreatOldAssessmentAsAuthorityAfterParentAdvances
 
 func newFourConcernProcessor(t *testing.T, service judgement.ConcernService, evaluator judgement.ConcernEvaluator) *judgement.ConcernProcessor {
 	t.Helper()
-	processor, err := judgement.NewConcernProcessor(service, evaluator, []judgement.Concern{
+	return newConcernProcessor(t, service, evaluator, []judgement.Concern{
 		{Name: "architecture-data-infrastructure", Prompt: "Does this change modify architecture, data models, or infrastructure requirements?", Reviewer: "noam@example.com"},
-		{Name: "design-system-user-experience", Prompt: "Does this change modify the design system or user experience?", Reviewer: "yon@example.com"},
+		{Name: "design-system-user-experience", Prompt: "Does this change modify the design system or user experience?", Reviewer: "ion@example.com"},
 		{Name: "copy-commercial-impact", Prompt: "Does this change modify copywriting or commercial behavior?", Reviewer: "iris@example.com"},
-		{Name: "prompts-models", Prompt: "Does this change modify prompts, LLM usage, or model selection?", Reviewer: "joule@example.com"},
+		{Name: "prompts-models", Prompt: "Does this change modify prompts, LLM usage, or model selection?", Reviewer: "jules@example.com"},
 	})
+
+}
+
+func newConcernProcessor(t *testing.T, service judgement.ConcernService, evaluator judgement.ConcernEvaluator, concerns []judgement.Concern) *judgement.ConcernProcessor {
+	t.Helper()
+	processor, err := judgement.NewConcernProcessor(service, evaluator, staticAssessmentInputSource{input: judgement.AssessmentInput{
+		Purpose:        "test purpose",
+		Priorities:     "test priorities",
+		ChangeEvidence: "test change evidence",
+		Concerns:       concerns,
+	}})
 	if err != nil {
 		t.Fatalf("new processor: %v", err)
 	}
 	return processor
+}
+
+type staticAssessmentInputSource struct {
+	input judgement.AssessmentInput
+	err   error
+}
+
+func (source staticAssessmentInputSource) Load(context.Context, string, intent.ConcernAssessmentContext) (judgement.AssessmentInput, error) {
+	return source.input, source.err
 }
 
 func judgementFixture() (intent.Version, intent.Revision) {
@@ -330,6 +353,10 @@ func (service *repositoryConcernService) RecordConcernAssessment(ctx context.Con
 	return service.repository.RecordConcernAssessment(ctx, assessment)
 }
 
+func (service *repositoryConcernService) UnresolvedReviewObligations(ctx context.Context, _ string, versionID intent.VersionID) ([]intent.ReviewObligation, error) {
+	return service.repository.UnresolvedReviewObligations(ctx, versionID)
+}
+
 func (service *repositoryConcernService) Promote(ctx context.Context, _ string, request intent.PromoteRequest) (intent.Promoted, error) {
 	return service.repository.Promote(ctx, request)
 }
@@ -371,6 +398,10 @@ func (service *recordingConcernService) RecordConcernAssessment(_ context.Contex
 	return recorded, nil
 }
 
+func (service *recordingConcernService) UnresolvedReviewObligations(context.Context, string, intent.VersionID) ([]intent.ReviewObligation, error) {
+	return service.existing.ReviewObligations(), nil
+}
+
 func (service *recordingConcernService) Promote(_ context.Context, _ string, request intent.PromoteRequest) (intent.Promoted, error) {
 	service.sequence++
 	service.promoteSequence = service.sequence
@@ -397,7 +428,7 @@ func (evaluator *mutatingEvaluator) Evaluate(_ context.Context, request judgemen
 	} else {
 		evaluator.secondDependencies = append([]intent.VersionID(nil), request.Version.Dependencies...)
 	}
-	return judgement.ConcernResult{Reason: "the concern does not apply", Evidence: []string{"no matching change"}}, nil
+	return judgement.ConcernResult{Reason: "the concern does not apply", Evidence: []string{"no matching change"}, Provenance: testEvaluatorProvenance}, nil
 }
 
 func (evaluator *recordingEvaluator) Evaluate(_ context.Context, request judgement.ConcernRequest) (judgement.ConcernResult, error) {
@@ -406,7 +437,14 @@ func (evaluator *recordingEvaluator) Evaluate(_ context.Context, request judgeme
 		return judgement.ConcernResult{}, evaluator.err
 	}
 	if result, found := evaluator.results[request.Concern.Name]; found {
+		if result.Provenance == (intent.EvaluatorProvenance{}) {
+			result.Provenance = testEvaluatorProvenance
+		}
 		return result, nil
 	}
-	return evaluator.defaultResult, nil
+	result := evaluator.defaultResult
+	if result.Provenance == (intent.EvaluatorProvenance{}) {
+		result.Provenance = testEvaluatorProvenance
+	}
+	return result, nil
 }

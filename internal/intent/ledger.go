@@ -33,6 +33,13 @@ type ConcernAssessmentStore interface {
 	RecordConcernAssessment(ctx context.Context, assessment ConcernAssessment) error
 }
 
+type ReviewResponseStore interface {
+	ReviewResponseByIdempotencyKey(ctx context.Context, key string) (ReviewResponse, bool, error)
+	ReviewResponses(ctx context.Context, versionID VersionID) ([]ReviewResponse, error)
+	PendingReviews(ctx context.Context, reviewer string, after ReviewCursor, limit int) ([]ReviewObligation, bool, error)
+	RecordReviewResponse(ctx context.Context, key string, response ReviewResponse) error
+}
+
 type AmendmentStore interface {
 	Amendment(ctx context.Context, toVersion VersionID) (Amendment, bool, error)
 	AmendmentByIdempotencyKey(ctx context.Context, key string) (Amended, bool, error)
@@ -75,6 +82,7 @@ type Ledger interface {
 	ChangeStore
 	PendingJudgementStore
 	ConcernAssessmentStore
+	ReviewResponseStore
 	AmendmentStore
 	DependentReconciliationStore
 	HeldVersionRebaseStore
@@ -93,6 +101,8 @@ type transientLedger struct {
 	pendingJudgements  map[VersionID]struct{}
 	judgementIDs       []VersionID
 	concernAssessments map[VersionID]ConcernAssessment
+	reviewResponses    map[VersionID][]ReviewResponse
+	reviewResponseByID map[ReviewResponseID]ReviewResponse
 	amendments         map[VersionID]Amendment
 	reconciliations    map[VersionID]DependentReconciliation
 	reconciliationIDs  []VersionID
@@ -117,12 +127,14 @@ const (
 	transientHeldVersionRebaseOperation
 	transientReconciliationConflictOperation
 	transientReconciliationResolutionOperation
+	transientReviewResponseOperation
 )
 
 type transientIdempotencyRecord struct {
 	operation  transientIdempotencyOperation
 	versionID  VersionID
 	conflictID ConflictID
+	reviewID   ReviewResponseID
 }
 
 func (ledger *transientLedger) CurrentIntent(context.Context) (Revision, bool, error) {
@@ -312,6 +324,8 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.pendingJudgements = make(map[VersionID]struct{})
 	ledger.judgementIDs = nil
 	ledger.concernAssessments = make(map[VersionID]ConcernAssessment)
+	ledger.reviewResponses = make(map[VersionID][]ReviewResponse)
+	ledger.reviewResponseByID = make(map[ReviewResponseID]ReviewResponse)
 	ledger.amendments = make(map[VersionID]Amendment)
 	ledger.reconciliations = make(map[VersionID]DependentReconciliation)
 	ledger.rebases = make(map[VersionID]HeldVersionRebase)
@@ -473,7 +487,7 @@ func (ledger *transientLedger) PreparePromotion(_ context.Context, prepared Prep
 		if assessment.GoverningIntent != ledger.current.ID {
 			return ErrIntentAdvanced
 		}
-		if len(assessment.ReviewObligations()) > 0 {
+		if len(unresolvedReviewObligations(assessment, ledger.reviewResponses[version.ID])) > 0 {
 			return ErrReviewRequired
 		}
 	}

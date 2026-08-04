@@ -3,12 +3,14 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/netip"
 	"time"
 
+	"github.com/sky-valley/gitrdone/internal/gitcontent"
 	"github.com/sky-valley/gitrdone/internal/intentapi"
 	"github.com/sky-valley/gitrdone/internal/intentservice"
 	judgementrunner "github.com/sky-valley/gitrdone/internal/judgement"
@@ -24,7 +26,8 @@ type Config struct {
 }
 
 type PendingRuntimeConfig struct {
-	Workers int
+	Workers          int
+	ProcessorFactory judgementrunner.PendingProcessorFactory
 }
 
 func NewServer(config Config) http.Handler {
@@ -33,12 +36,16 @@ func NewServer(config Config) http.Handler {
 }
 
 func NewServerWithClose(config Config) (http.Handler, func() error) {
-	return NewServerWithPendingRunner(config, PendingRuntimeConfig{})
+	handler, closeServer, err := NewServerWithPendingRunner(config, PendingRuntimeConfig{})
+	if err != nil {
+		return internalServerError(), func() error { return err }
+	}
+	return handler, closeServer
 }
 
 // NewServerWithPendingRunner returns both the handler and ownership of the
 // background pending-work runtime. Callers must invoke the returned closer.
-func NewServerWithPendingRunner(config Config, runtime PendingRuntimeConfig) (http.Handler, func() error) {
+func NewServerWithPendingRunner(config Config, runtime PendingRuntimeConfig) (http.Handler, func() error, error) {
 	repos := newMemoryRepoStore(nil)
 	gitStorage := newFilesystemGitStorage(config.StorageRoot)
 	repos.gitStorage = gitStorage
@@ -46,13 +53,19 @@ func NewServerWithPendingRunner(config Config, runtime PendingRuntimeConfig) (ht
 }
 
 func NewServerWithStores(config Config, repos repoStore, idempotency idempotencyDoer) http.Handler {
-	handler, _ := newServerWithStores(config, PendingRuntimeConfig{}, repos, idempotency, newFilesystemGitStorage(config.StorageRoot))
+	handler, _, err := newServerWithStores(config, PendingRuntimeConfig{}, repos, idempotency, newFilesystemGitStorage(config.StorageRoot))
+	if err != nil {
+		return internalServerError()
+	}
 	return handler
 }
 
-func newServerWithStores(config Config, runtime PendingRuntimeConfig, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) (http.Handler, func() error) {
-	resources := buildServer(config, runtime, repos, idempotency, gitStorage)
-	return resources.handler, resources.close
+func newServerWithStores(config Config, runtime PendingRuntimeConfig, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) (http.Handler, func() error, error) {
+	resources, err := buildServer(config, runtime, repos, idempotency, gitStorage)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resources.handler, resources.close, nil
 }
 
 type serverResources struct {
@@ -61,7 +74,7 @@ type serverResources struct {
 	close     func() error
 }
 
-func buildServer(config Config, runtime PendingRuntimeConfig, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) serverResources {
+func buildServer(config Config, runtime PendingRuntimeConfig, repos repoStore, idempotency idempotencyDoer, gitStorage repoGitStorage) (serverResources, error) {
 	control := func(handler http.Handler) http.Handler {
 		return controlAuth(config.ControlBearer, handler)
 	}
@@ -73,14 +86,28 @@ func buildServer(config Config, runtime PendingRuntimeConfig, repos repoStore, i
 	intentHandlers := intentapi.NewHandlers(intentService)
 	closeRunner := func() error { return nil }
 	if runtime.Workers > 0 {
+		if runtime.ProcessorFactory == nil {
+			_ = intentRepositories.Close()
+			return serverResources{}, errors.New("judgement workers require an explicit processor factory")
+		}
+		contentSource, err := gitcontent.NewSource(gitContentLocator{storage: gitStorage})
+		if err != nil {
+			_ = intentRepositories.Close()
+			return serverResources{}, fmt.Errorf("create repository content source: %w", err)
+		}
+		processor, err := runtime.ProcessorFactory.Build(intentService, contentSource)
+		if err != nil {
+			_ = intentRepositories.Close()
+			return serverResources{}, fmt.Errorf("create pending judgement processor: %w", err)
+		}
 		runner := judgementrunner.NewPendingRunner(
 			newFilesystemPendingSource(intentRepositories),
 			judgementrunner.NewMemoryLeases(nil),
-			judgementrunner.NewApproveAllProcessor(intentService),
+			processor,
 			judgementrunner.RunnerOptions{
 				Workers:      runtime.Workers,
 				BatchSize:    runtime.Workers,
-				PollInterval: 100 * time.Millisecond,
+				PollInterval: time.Second,
 				LeaseTTL:     5 * time.Minute,
 				Report: func(err error) {
 					log.Printf("gitrdone pending runner: %v", err)
@@ -117,6 +144,8 @@ func buildServer(config Config, runtime PendingRuntimeConfig, repos repoStore, i
 		GetReconciliationConflict:    repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.GetReconciliationConflict),
 		GetChange:                    repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.GetChange),
 		ListVersions:                 repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityInspect, intentHandlers.ListVersions),
+		ListReviews:                  repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityReview, intentHandlers.ListReviews),
+		RecordReviewResponse:         repositoryAccessAuth(config.ControlBearer, repos, repoCapabilityReview, intentHandlers.RecordReviewResponse),
 		GitSmartHTTP:                 gitSmartHTTPHandler(repos, execGitHTTPBackend{}),
 		GitLFS:                       gitLFSHandler(repos, newFilesystemLFSObjectStore(config.StorageRoot), config.MaxLFSObjectBytes),
 		GitShowDiff:                  gitDiffHandler(repos, execGitDiffBackend{}, gitDiffShow),
@@ -129,7 +158,19 @@ func buildServer(config Config, runtime PendingRuntimeConfig, repos repoStore, i
 		close: func() error {
 			return errors.Join(closeRunner(), intentRepositories.Close())
 		},
+	}, nil
+}
+
+type gitContentLocator struct {
+	storage repoGitStorage
+}
+
+func (locator gitContentLocator) BareRepoPath(ctx context.Context, repoID string) (string, error) {
+	rawID, ok := parseRepoControlID(repoID)
+	if !ok {
+		return "", errors.New("repository id is invalid")
 	}
+	return locator.storage.BareRepoPath(ctx, rawID)
 }
 
 func internalServerError() http.Handler {

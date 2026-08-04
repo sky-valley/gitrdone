@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,6 +77,8 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 		"GITRDONE_SHUTDOWN_TIMEOUT":     "30s",
 		"GITRDONE_MAX_LFS_OBJECT_BYTES": "12345",
 		"GITRDONE_JUDGEMENT_WORKERS":    "2",
+		"GITRDONE_JUDGEMENT_MODEL":      "claude-opus-4-8",
+		"ANTHROPIC_API_KEY":             "test-anthropic-key",
 		"SENTRY_DSN":                    "https://public@example.ingest.sentry.io/123",
 		"SENTRY_ENVIRONMENT":            "main",
 		"SENTRY_RELEASE":                "abc1234",
@@ -113,6 +116,12 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	if cfg.judgementWorkers != 2 {
 		t.Fatalf("judgementWorkers = %d, want 2", cfg.judgementWorkers)
 	}
+	if cfg.judgementModel != "claude-opus-4-8" {
+		t.Fatalf("judgementModel = %q, want claude-opus-4-8", cfg.judgementModel)
+	}
+	if cfg.anthropicAPIKey != "test-anthropic-key" {
+		t.Fatalf("anthropicAPIKey = %q, want configured key", cfg.anthropicAPIKey)
+	}
 	if cfg.sentryDSN != "https://public@example.ingest.sentry.io/123" {
 		t.Fatalf("sentryDSN = %q, want configured DSN", cfg.sentryDSN)
 	}
@@ -128,6 +137,38 @@ func TestConfigFromEnvUsesOverrides(t *testing.T) {
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "10.20.30.40")
 	requireTrustedProxy(t, cfg.trustedProxyPrefixes, "192.0.2.10")
 	requireUntrustedProxy(t, cfg.trustedProxyPrefixes, "127.0.0.1")
+}
+
+func TestConfigFromEnvDefaultsJudgementModel(t *testing.T) {
+	cfg, err := configFromEnv(func(key string) string {
+		values := map[string]string{
+			"GITRDONE_CONTROL_BEARER":    "internal-admin-token",
+			"GITRDONE_JUDGEMENT_WORKERS": "1",
+			"ANTHROPIC_API_KEY":          "test-anthropic-key",
+		}
+		return values[key]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.judgementModel != "claude-sonnet-5" {
+		t.Fatalf("judgementModel = %q, want claude-sonnet-5", cfg.judgementModel)
+	}
+}
+
+func TestConfigFromEnvRequiresAnthropicKeyWhenJudgementRuns(t *testing.T) {
+	_, err := configFromEnv(func(key string) string {
+		if key == "GITRDONE_CONTROL_BEARER" {
+			return "internal-admin-token"
+		}
+		if key == "GITRDONE_JUDGEMENT_WORKERS" {
+			return "1"
+		}
+		return ""
+	})
+	if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		t.Fatalf("config error = %v, want missing Anthropic key", err)
+	}
 }
 
 func TestConfigFromEnvRequiresControlBearer(t *testing.T) {

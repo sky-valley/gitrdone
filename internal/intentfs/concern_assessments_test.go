@@ -39,9 +39,13 @@ func TestLedgerRestoresConcernAssessmentAndHumanReviewWait(t *testing.T) {
 		VersionID:       proposed.Version.ID,
 		GoverningIntent: proposed.Version.BaseIntent,
 		Evaluations: []intent.ConcernEvaluation{{
-			Concern:        "prompts-and-models",
-			Prompt:         "Does this change modify prompts, LLM usage, or model selection?",
-			Reviewer:       "joule@example.com",
+			Concern:  "prompts-and-models",
+			Prompt:   "Does this change modify prompts, LLM usage, or model selection?",
+			Reviewer: "jules@example.com",
+			Provenance: intent.EvaluatorProvenance{
+				Evaluator:        "pi+anthropic://claude-sonnet-5",
+				ContractRevision: "gitrdone.concern-assessment/v1",
+			},
 			RequiresReview: true,
 			Reason:         "the candidate changes the model used for booking assistance",
 			Evidence:       []string{"internal/booking/prompt.go", "config/models.go"},
@@ -112,6 +116,83 @@ func TestLedgerRestoresConcernAssessmentAndHumanReviewWait(t *testing.T) {
 	}
 }
 
+func TestLedgerRestoresHumanReviewResponseAndReleasedJudgement(t *testing.T) {
+	ctx := context.Background()
+	journalPath := filepath.Join(t.TempDir(), "intent.journal")
+	initial := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	firstLedger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRepository, err := intent.OpenRepository(ctx, initial, firstLedger, &recordingAdmission{}, &recordingProjection{current: initial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed, err := firstRepository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "reviewed-after-restart",
+		BaseIntent:     firstRepository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "ion@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = firstRepository.RecordConcernAssessment(ctx, intent.ConcernAssessment{
+		VersionID:       proposed.Version.ID,
+		GoverningIntent: proposed.Version.BaseIntent,
+		Evaluations: []intent.ConcernEvaluation{{
+			Concern:        "architecture-and-data",
+			Prompt:         "Does this change modify architecture or data models?",
+			Reviewer:       "noam@example.com",
+			RequiresReview: true,
+			Reason:         "the candidate adds a database",
+			Evidence:       []string{"internal/database.go"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := firstRepository.RecordReviewResponse(ctx, intent.ReviewResponseRequest{
+		IdempotencyKey: "durable-approval",
+		VersionID:      proposed.Version.ID,
+		Concern:        "architecture-and-data",
+		Reviewer:       "noam@example.com",
+		Decision:       intent.ReviewApproved,
+		Rationale:      "the operational plan is sufficient",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstLedger.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondLedger, err := intentfs.Open(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = secondLedger.Close() })
+	secondRepository, err := intent.OpenRepository(ctx, initial, secondLedger, &recordingAdmission{}, &recordingProjection{current: initial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retried, err := secondRepository.RecordReviewResponse(ctx, intent.ReviewResponseRequest{
+		IdempotencyKey: "durable-approval",
+		VersionID:      proposed.Version.ID,
+		Concern:        "architecture-and-data",
+		Reviewer:       "noam@example.com",
+		Decision:       intent.ReviewApproved,
+		Rationale:      "the operational plan is sufficient",
+	})
+	if err != nil || !reflect.DeepEqual(retried, approved) {
+		t.Fatalf("restored approval retry = %#v, %v; want %#v, nil", retried, err, approved)
+	}
+	runnable, err := secondRepository.RunnableJudgements(ctx, intent.PendingJudgementQuery{Limit: 10})
+	if err != nil || len(runnable.Versions) != 1 || runnable.Versions[0].ID != proposed.Version.ID {
+		t.Fatalf("restored runnable = %#v, %v; want approved Version", runnable, err)
+	}
+}
+
 func TestRunnableJudgementPaginationConformsAcrossTransientAndFilesystemLedgers(t *testing.T) {
 	initial := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
 	t.Run("transient", func(t *testing.T) {
@@ -152,6 +233,29 @@ func TestRunnableJudgementPaginationConformsAcrossTransientAndFilesystemLedgers(
 			t.Fatalf("reopen repository: %v", err)
 		}
 		assertRunnableJudgementPages(t, secondRepository, want)
+	})
+}
+
+func TestPendingReviewCursorSurvivesCursorVersionReplacementAcrossLedgers(t *testing.T) {
+	initial := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	t.Run("transient", func(t *testing.T) {
+		repository, err := intent.NewRepository(initial, &recordingAdmission{}, &recordingProjection{current: initial})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertReviewCursorSurvivesReplacement(t, repository)
+	})
+	t.Run("filesystem", func(t *testing.T) {
+		ledger, err := intentfs.Open(filepath.Join(t.TempDir(), "intent.journal"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ledger.Close() })
+		repository, err := intent.OpenRepository(context.Background(), initial, ledger, &recordingAdmission{}, &recordingProjection{current: initial})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertReviewCursorSurvivesReplacement(t, repository)
 	})
 }
 
@@ -279,5 +383,66 @@ func assertRunnableJudgementPages(t *testing.T, repository *intent.Repository, w
 	}
 	if _, err := repository.RunnableJudgements(ctx, intent.PendingJudgementQuery{After: "version_missing", Limit: 1}); !errors.Is(err, intent.ErrVersionNotFound) {
 		t.Fatalf("invalid runnable cursor error = %v, want ErrVersionNotFound", err)
+	}
+}
+
+func assertReviewCursorSurvivesReplacement(t *testing.T, repository *intent.Repository) {
+	t.Helper()
+	ctx := context.Background()
+	base := repository.CurrentIntent()
+	propose := func(key, revision string) intent.Proposed {
+		proposed, err := repository.Propose(ctx, intent.Proposal{
+			IdempotencyKey: key,
+			BaseIntent:     base.ID,
+			Content:        intent.ContentRef{Engine: "git", Revision: revision},
+			Producer:       "ion@example.com",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return proposed
+	}
+	first := propose("cursor-first", "bbbbbbbb")
+	second := propose("cursor-second", "cccccccc")
+	for _, proposed := range []intent.Proposed{first, second} {
+		if _, err := repository.RecordConcernAssessment(ctx, intent.ConcernAssessment{
+			VersionID:       proposed.Version.ID,
+			GoverningIntent: base.ID,
+			Evaluations: []intent.ConcernEvaluation{{
+				Concern:        "architecture",
+				Prompt:         "Does this change modify architecture?",
+				Reviewer:       "noam@example.com",
+				RequiresReview: true,
+				Reason:         "architecture changed",
+				Evidence:       []string{"architecture.go"},
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := repository.PendingReviews(ctx, intent.PendingReviewQuery{Reviewer: "noam@example.com", Limit: 1})
+	if err != nil || len(page.Obligations) != 1 || page.Obligations[0].VersionID != first.Version.ID {
+		t.Fatalf("first review page = %#v, %v", page, err)
+	}
+	if _, err := repository.Amend(ctx, intent.AmendRequest{
+		IdempotencyKey:  "replace-review-cursor",
+		ChangeID:        first.Change.ID,
+		ExpectedVersion: first.Version.ID,
+		Content:         intent.ContentRef{Engine: "git", Revision: "dddddddd"},
+		Producer:        "repository-agent@example.com",
+		Rationale:       "replace the first candidate",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	continued, err := repository.PendingReviews(ctx, intent.PendingReviewQuery{
+		Reviewer: "noam@example.com",
+		After:    page.NextCursor,
+		Limit:    1,
+	})
+	if err != nil {
+		t.Fatalf("continue after superseded review cursor: %v", err)
+	}
+	if len(continued.Obligations) != 1 || continued.Obligations[0].VersionID != second.Version.ID {
+		t.Fatalf("continued review page = %#v, want Version %q", continued, second.Version.ID)
 	}
 }

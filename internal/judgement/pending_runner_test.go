@@ -95,7 +95,10 @@ func TestPendingRunnerReleasesFailedWorkForRetry(t *testing.T) {
 		source,
 		judgement.NewMemoryLeases(nil),
 		processor,
-		judgement.RunnerOptions{Workers: 1, BatchSize: 1, PollInterval: time.Millisecond, LeaseTTL: 100 * time.Millisecond},
+		judgement.RunnerOptions{
+			Workers: 1, BatchSize: 1, PollInterval: time.Millisecond, LeaseTTL: 100 * time.Millisecond,
+			RetryBackoff: time.Millisecond, MaxRetryBackoff: time.Millisecond,
+		},
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,6 +117,40 @@ func TestPendingRunnerReleasesFailedWorkForRetry(t *testing.T) {
 
 	if got := processor.callCount(); got != 2 {
 		t.Fatalf("processor calls = %d, want failure then retry", got)
+	}
+}
+
+func TestPendingRunnerBacksOffRepeatedFailures(t *testing.T) {
+	item := judgement.WorkItem{RepoID: "repo_a", VersionID: "version_a"}
+	source := newPendingSource(item)
+	processor := &alwaysFailProcessor{called: make(chan time.Time, 3)}
+	runner := judgement.NewPendingRunner(
+		source,
+		judgement.NewMemoryLeases(nil),
+		processor,
+		judgement.RunnerOptions{
+			Workers: 1, BatchSize: 1, PollInterval: time.Millisecond, LeaseTTL: 100 * time.Millisecond,
+			RetryBackoff: 40 * time.Millisecond, MaxRetryBackoff: 80 * time.Millisecond,
+		},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runner.Run(ctx)
+	}()
+	first := nextFailureCall(t, processor.called)
+	second := nextFailureCall(t, processor.called)
+	third := nextFailureCall(t, processor.called)
+	cancel()
+	<-done
+
+	if gap := second.Sub(first); gap < 30*time.Millisecond {
+		t.Fatalf("first retry gap = %s, want exponential cooldown near 40ms", gap)
+	}
+	if gap := third.Sub(second); gap < 60*time.Millisecond {
+		t.Fatalf("second retry gap = %s, want exponential cooldown near 80ms", gap)
 	}
 }
 
@@ -361,6 +398,26 @@ type blockingProcessor struct {
 	calls   int
 	active  int
 	maximum int
+}
+
+type alwaysFailProcessor struct {
+	called chan time.Time
+}
+
+func (processor *alwaysFailProcessor) Process(_ context.Context, _ judgement.WorkItem) error {
+	processor.called <- time.Now()
+	return errors.New("permanent judgement failure")
+}
+
+func nextFailureCall(t *testing.T, called <-chan time.Time) time.Time {
+	t.Helper()
+	select {
+	case at := <-called:
+		return at
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for failed judgement attempt")
+		return time.Time{}
+	}
 }
 
 type observedLeases struct {

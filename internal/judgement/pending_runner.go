@@ -32,11 +32,13 @@ type PendingProcessor interface {
 }
 
 type RunnerOptions struct {
-	Workers      int
-	BatchSize    int
-	PollInterval time.Duration
-	LeaseTTL     time.Duration
-	Report       func(error)
+	Workers         int
+	BatchSize       int
+	PollInterval    time.Duration
+	LeaseTTL        time.Duration
+	RetryBackoff    time.Duration
+	MaxRetryBackoff time.Duration
+	Report          func(error)
 }
 
 type PendingRunner struct {
@@ -47,8 +49,18 @@ type PendingRunner struct {
 	batchSize    int
 	pollInterval time.Duration
 	leaseTTL     time.Duration
+	retryBackoff time.Duration
+	retryMax     time.Duration
 	report       func(error)
 	owner        string
+	retryMu      sync.Mutex
+	retries      map[WorkKey]retryState
+}
+
+type retryState struct {
+	failures    int
+	nextAttempt time.Time
+	forgetAfter time.Time
 }
 
 type claimedWork struct {
@@ -77,6 +89,17 @@ func NewPendingRunner(source PendingSource, leases LeaseStore, processor Pending
 	if leaseTTL <= 0 {
 		leaseTTL = 5 * time.Minute
 	}
+	retryBackoff := options.RetryBackoff
+	if retryBackoff <= 0 {
+		retryBackoff = 5 * time.Second
+	}
+	retryMax := options.MaxRetryBackoff
+	if retryMax <= 0 {
+		retryMax = 5 * time.Minute
+	}
+	if retryMax < retryBackoff {
+		retryMax = retryBackoff
+	}
 	report := options.Report
 	if report == nil {
 		report = func(error) {}
@@ -89,8 +112,11 @@ func NewPendingRunner(source PendingSource, leases LeaseStore, processor Pending
 		batchSize:    batchSize,
 		pollInterval: pollInterval,
 		leaseTTL:     leaseTTL,
+		retryBackoff: retryBackoff,
+		retryMax:     retryMax,
 		report:       report,
 		owner:        fmt.Sprintf("pending-runner-%d", runnerSequence.Add(1)),
+		retries:      make(map[WorkKey]retryState),
 	}
 }
 
@@ -122,9 +148,13 @@ func (runner *PendingRunner) Run(ctx context.Context) {
 			}
 			continue
 		}
+		runner.pruneRetries(time.Now())
 
 		completed := make([]<-chan struct{}, 0, len(page.Items))
 		for _, item := range page.Items {
+			if !runner.retryReady(item, time.Now()) {
+				continue
+			}
 			done := make(chan struct{})
 			select {
 			case work <- workRequest{item: item, done: done}:
@@ -187,9 +217,61 @@ func (runner *PendingRunner) process(ctx context.Context, item WorkItem) {
 	cancelProcess()
 	<-renewDone
 	if err != nil && !errors.Is(err, context.Canceled) {
+		runner.noteFailure(claimed.item, time.Now())
 		runner.report(fmt.Errorf("process pending %s/%s: %w", claimed.item.RepoID, claimed.item.VersionID, err))
+	} else if err == nil {
+		runner.clearRetry(claimed.item)
 	}
 	runner.release(claimed.lease)
+}
+
+func (runner *PendingRunner) retryReady(item WorkItem, now time.Time) bool {
+	runner.retryMu.Lock()
+	defer runner.retryMu.Unlock()
+	state, found := runner.retries[workKey(item)]
+	return !found || !now.Before(state.nextAttempt)
+}
+
+func (runner *PendingRunner) noteFailure(item WorkItem, now time.Time) {
+	runner.retryMu.Lock()
+	defer runner.retryMu.Unlock()
+	key := workKey(item)
+	state := runner.retries[key]
+	state.failures++
+	delay := runner.retryBackoff
+	for attempt := 1; attempt < state.failures && delay < runner.retryMax; attempt++ {
+		if delay > runner.retryMax/2 {
+			delay = runner.retryMax
+			break
+		}
+		delay *= 2
+	}
+	if delay > runner.retryMax {
+		delay = runner.retryMax
+	}
+	state.nextAttempt = now.Add(delay)
+	state.forgetAfter = state.nextAttempt.Add(runner.retryMax)
+	runner.retries[key] = state
+}
+
+func (runner *PendingRunner) clearRetry(item WorkItem) {
+	runner.retryMu.Lock()
+	defer runner.retryMu.Unlock()
+	delete(runner.retries, workKey(item))
+}
+
+func (runner *PendingRunner) pruneRetries(now time.Time) {
+	runner.retryMu.Lock()
+	defer runner.retryMu.Unlock()
+	for key, state := range runner.retries {
+		if !now.Before(state.forgetAfter) {
+			delete(runner.retries, key)
+		}
+	}
+}
+
+func workKey(item WorkItem) WorkKey {
+	return WorkKey{RepoID: item.RepoID, VersionID: item.VersionID}
 }
 
 func (runner *PendingRunner) release(lease Lease) {

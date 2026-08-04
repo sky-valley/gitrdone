@@ -132,7 +132,7 @@ func runnableJudgement(state journalState, versionID intent.VersionID) bool {
 		return false
 	}
 	assessment, assessed := state.concernAssessments[versionID]
-	return !assessed || assessment.GoverningIntent == state.current.ID && len(assessment.ReviewObligations()) == 0
+	return !assessed || assessment.GoverningIntent == state.current.ID && len(unresolvedReviewObligations(assessment, state.reviewResponses[versionID])) == 0
 }
 
 func sameConcernAssessment(left, right intent.ConcernAssessment) bool {
@@ -141,7 +141,7 @@ func sameConcernAssessment(left, right intent.ConcernAssessment) bool {
 	}
 	for index := range left.Evaluations {
 		l, r := left.Evaluations[index], right.Evaluations[index]
-		if l.Concern != r.Concern || l.Prompt != r.Prompt || l.Reviewer != r.Reviewer || l.RequiresReview != r.RequiresReview || l.Reason != r.Reason || !slices.Equal(l.Evidence, r.Evidence) {
+		if l.Concern != r.Concern || l.Prompt != r.Prompt || l.Reviewer != r.Reviewer || l.Provenance != r.Provenance || l.RequiresReview != r.RequiresReview || l.Reason != r.Reason || !slices.Equal(l.Evidence, r.Evidence) {
 			return false
 		}
 	}

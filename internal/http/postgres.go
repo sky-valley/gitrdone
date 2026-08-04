@@ -547,7 +547,11 @@ func NewPostgresServerWithPendingRunner(ctx context.Context, config Config, data
 	repos := newPostgresRepoStore(db, nil)
 	gitStorage := newFilesystemGitStorage(config.StorageRoot)
 	repos.gitStorage = gitStorage
-	handler, closeIntentRepositories := newServerWithStores(config, runtime, repos, newPostgresIdempotencyStore(db, nil), gitStorage)
+	handler, closeIntentRepositories, err := newServerWithStores(config, runtime, repos, newPostgresIdempotencyStore(db, nil), gitStorage)
+	if err != nil {
+		db.Close()
+		return nil, nil, err
+	}
 	return handler, func() error {
 		intentErr := closeIntentRepositories()
 		db.Close()
